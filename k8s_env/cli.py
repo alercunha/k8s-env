@@ -112,6 +112,13 @@ def _use_global(ctx: AppContext) -> bool:
     return ctx.global_mode or not os.path.isfile(ctx.env_path)
 
 
+def _profile_label(p: service.Profile) -> str:
+    # Format: "name — tool on location / namespace"
+    env = p.env
+    location = env.ssh_host or env.context or 'local'
+    return f'{p.name} {_DIM}— {env.tool} on {location} / {env.namespace}{_NC}'
+
+
 def _try_activate_existing(ctx: AppContext) -> bool:
     # In global mode, offer existing profiles before running discovery
     if not _use_global(ctx):
@@ -119,13 +126,14 @@ def _try_activate_existing(ctx: AppContext) -> bool:
     profiles = service.list_profiles()
     if not profiles:
         return False
-    items = profiles + ['+ Discover new...']
+    items = [_profile_label(p) for p in profiles] + ['+ Discover new...']
     choice = pick('Global profiles', items)[0]
     if choice[0] >= len(profiles):
         return False
-    service.activate_profile(profiles[choice[0]])
+    selected = profiles[choice[0]]
+    service.activate_profile(selected.name)
     print()
-    print_status(f'Activated global profile {_BOLD}{profiles[choice[0]]}{_NC}')
+    print_status(f'Activated global profile {_BOLD}{selected.name}{_NC}')
     return True
 
 
@@ -205,8 +213,147 @@ def cmd_pods(ctx: AppContext, filter_text: str) -> None:
     print_banner(ctx)
     ns = ctx.namespace
     print_status(f'Pods in {_BOLD}{ns}{_NC}')
-    output = ctx.kubectl.get_pods(ns)
-    print_filtered(output, filter_text)
+    print_filtered(ctx.kubectl.get_pods(ns), filter_text)
+
+
+def cmd_services(ctx: AppContext, filter_text: str) -> None:
+    service.require_env(ctx)
+    print_banner(ctx)
+    ns = ctx.namespace
+    print_status(f'Services in {_BOLD}{ns}{_NC}')
+    print_filtered(ctx.kubectl.get_services(ns), filter_text)
+
+
+def cmd_secrets(ctx: AppContext, filter_text: str) -> None:
+    service.require_env(ctx)
+    print_banner(ctx)
+    ns = ctx.namespace
+    print_status(f'Secrets in {_BOLD}{ns}{_NC} {_DIM}(names only){_NC}')
+    print_filtered(ctx.kubectl.get_secrets(ns), filter_text)
+
+
+def cmd_cronjobs(ctx: AppContext, filter_text: str) -> None:
+    service.require_env(ctx)
+    print_banner(ctx)
+    ns = ctx.namespace
+    print_status(f'CronJobs in {_BOLD}{ns}{_NC}')
+    print_filtered(ctx.kubectl.get_cronjobs(ns), filter_text)
+
+
+def cmd_events(ctx: AppContext, filter_text: str) -> None:
+    service.require_env(ctx)
+    print_banner(ctx)
+    ns = ctx.namespace
+    print_status(f'Recent events in {_BOLD}{ns}{_NC}')
+    # Show last 30 lines of sorted events
+    output = ctx.kubectl.get_events(ns)
+    lines = output.rstrip('\n').splitlines()
+    trimmed = '\n'.join(lines[:1] + lines[-30:]) if len(lines) > 31 else output
+    print_filtered(trimmed, filter_text)
+
+
+def cmd_logs(ctx: AppContext, filter_text: str) -> None:
+    service.require_env(ctx)
+    print_banner(ctx)
+    ns = ctx.namespace
+    k = ctx.kubectl
+
+    pods = k.list_pods(ns)
+    if filter_text:
+        lower = filter_text.lower()
+        pods = [p for p in pods if lower in p.lower()]
+    if not pods:
+        print_warning(f'No pods found in {ns}')
+        return
+
+    if ctx.follow:
+        # Pick one pod and stream its logs
+        selected = pick('Follow logs for', pods, auto=True)[0][1]
+        print_status(f'Tailing {_BOLD}{selected}{_NC} (Ctrl+C to stop)')
+        k.follow_logs(selected, ns)
+    else:
+        # Show last 20 lines per pod
+        for pod in pods:
+            print()
+            print(f'{_CYAN}{_BOLD}--- {pod} ---{_NC}')
+            try:
+                print(k.get_logs(pod, ns), end='')
+            except RuntimeError:
+                print(f'{_DIM}(no logs){_NC}')
+
+
+def cmd_configmaps(ctx: AppContext) -> None:
+    service.require_env(ctx)
+    print_banner(ctx)
+    ns = ctx.namespace
+
+    cms = ctx.kubectl.list_configmaps(ns)
+    if not cms:
+        print_warning(f'No configmaps found in {ns}')
+        return
+
+    print(f'{_BOLD}ConfigMaps in {ns}:{_NC}')
+    for i, cm in enumerate(cms):
+        print(f'  {_CYAN}{i + 1}){_NC} {cm}')
+    print()
+    raw = input(f'View configmap? [1-{len(cms)}, enter to skip]: ').strip()
+    if not raw:
+        return
+    if not raw.isdigit() or not (1 <= int(raw) <= len(cms)):
+        raise SystemExit(f'Invalid selection: {raw}')
+    print()
+    print(ctx.kubectl.get_configmap_yaml(cms[int(raw) - 1], ns), end='')
+
+
+def cmd_describe(ctx: AppContext, arg: str) -> None:
+    service.require_env(ctx)
+    print_banner(ctx)
+    ns = ctx.namespace
+
+    if not arg:
+        resources = ctx.kubectl.list_resources(ns)
+        if not resources:
+            print_warning(f'No resources found in {ns}')
+            return
+        arg = pick(f'Resources in {ns}', resources, auto=True)[0][1]
+    print(ctx.kubectl.describe(arg, ns), end='')
+
+
+def cmd_status(ctx: AppContext) -> None:
+    service.require_env(ctx)
+    print_banner(ctx)
+    ns = ctx.namespace
+    print()
+
+    output = ctx.kubectl.get_resources_summary(ns)
+    lines = output.strip().splitlines()
+
+    # Count resources by type prefix
+    counts = {'node/': 0, 'pod/': 0, 'deployment': 0, 'service/': 0}
+    pod_lines = []
+    for line in lines:
+        for prefix in counts:
+            if line.startswith(prefix):
+                counts[prefix] += 1
+        if line.startswith('pod/'):
+            pod_lines.append(line)
+
+    print(f'{_BOLD}Cluster:{_NC}')
+    print(f'  Nodes:        {counts["node/"]}')
+    print()
+    print(f'{_BOLD}Namespace {ns}:{_NC}')
+    print(f'  Pods:         {counts["pod/"]}')
+    print(f'  Deployments:  {counts["deployment"]}')
+    print(f'  Services:     {counts["service/"]}')
+    print()
+
+    not_ready = [l for l in pod_lines if 'Running' not in l and 'Completed' not in l]
+    if not_ready:
+        print_warning('Pods not running:')
+        for line in not_ready:
+            print(f'  {line.removeprefix("pod/")}')
+    else:
+        print_status('All pods running')
 
 
 # -- Help ---------------------------------------------------------------------
@@ -221,9 +368,18 @@ def show_help(ctx: AppContext) -> None:
     print()
     print(f'{_BOLD}Inspection:{_NC}')
     print('  pods [filter]          List pods (filter by name)')
+    print('  logs [filter] [-f]     Show last 20 log lines per pod (-f to follow)')
+    print('  services [filter]      List services')
     print('  namespaces             List all namespaces')
+    print('  events [filter]        Show recent events')
+    print('  configmaps             List configmaps (interactive viewer)')
+    print('  secrets [filter]       List secret names')
+    print('  cronjobs [filter]      List cronjobs')
+    print('  status                 Show cluster and namespace stats')
+    print('  describe [resource]    Describe a resource (picker if omitted)')
     print()
     print(f'{_BOLD}Options:{_NC}')
+    print('  -f                     Follow logs (used with logs)')
     print('  -g, --global           Force global profile mode')
     print('  -n <namespace>         Override saved namespace')
     print('  -h, --help             Show this help')
@@ -246,6 +402,19 @@ _COMMANDS = {
     'namespaces': lambda ctx, _arg: cmd_namespaces(ctx),
     'ns':         lambda ctx, _arg: cmd_namespaces(ctx),
     'pods':       lambda ctx, arg: cmd_pods(ctx, arg),
+    'logs':       lambda ctx, arg: cmd_logs(ctx, arg),
+    'services':   lambda ctx, arg: cmd_services(ctx, arg),
+    'svc':        lambda ctx, arg: cmd_services(ctx, arg),
+    'secrets':    lambda ctx, arg: cmd_secrets(ctx, arg),
+    'cronjobs':   lambda ctx, arg: cmd_cronjobs(ctx, arg),
+    'cj':         lambda ctx, arg: cmd_cronjobs(ctx, arg),
+    'events':     lambda ctx, arg: cmd_events(ctx, arg),
+    'configmaps': lambda ctx, _arg: cmd_configmaps(ctx),
+    'cm':         lambda ctx, _arg: cmd_configmaps(ctx),
+    'describe':   lambda ctx, arg: cmd_describe(ctx, arg),
+    'desc':       lambda ctx, arg: cmd_describe(ctx, arg),
+    'status':     lambda ctx, _arg: cmd_status(ctx),
+    'st':         lambda ctx, _arg: cmd_status(ctx),
 }
 
 
@@ -253,6 +422,7 @@ def main() -> None:
     # Parse flags and positional args (command + optional arg)
     ns_override = ''
     global_mode = False
+    follow = False
     positional: list[str] = []
     show_help_flag = False
 
@@ -265,6 +435,9 @@ def main() -> None:
         elif args[i] in ('-g', '--global'):
             global_mode = True
             i += 1
+        elif args[i] == '-f':
+            follow = True
+            i += 1
         elif args[i] in ('-h', '--help'):
             show_help_flag = True
             i += 1
@@ -272,7 +445,7 @@ def main() -> None:
             positional.append(args[i])
             i += 1
 
-    ctx = AppContext(ns_override=ns_override, global_mode=global_mode)
+    ctx = AppContext(ns_override=ns_override, global_mode=global_mode, follow=follow)
     command = positional[0] if positional else ''
     arg = positional[1] if len(positional) > 1 else ''
 

@@ -43,6 +43,11 @@ class KubeCtl(ABC):
             raise RuntimeError(result.stderr.strip() or f'Command failed: {shlex.join(cmd)}')
         return result.stdout
 
+    def stream(self, *args: str) -> None:
+        # Run with inherited stdout/stderr (not captured) — used for follow mode
+        cmd = self._base_cmd() + list(args)
+        subprocess.run(cmd)
+
     # -- High-level methods --------------------------------------------------
 
     def get_pods(self, namespace: str, wide: bool = True, timeout: int | None = None) -> str:
@@ -50,6 +55,14 @@ class KubeCtl(ABC):
         if wide:
             cmd += ['-o', 'wide']
         return self.run(*cmd, timeout=timeout)
+
+    def list_pods(self, namespace: str, timeout: int | None = None) -> list[str]:
+        out = self.run(
+            'get', 'pods', '-n', namespace, '-o',
+            'jsonpath={range .items[*]}{.metadata.name}{"\\n"}{end}',
+            timeout=timeout,
+        )
+        return [p for p in out.strip().splitlines() if p]
 
     def get_namespaces_all(self, timeout: int | None = None) -> str:
         return self.run('get', 'namespaces', timeout=timeout)
@@ -63,6 +76,52 @@ class KubeCtl(ABC):
         return sorted(
             ns for ns in out.strip().splitlines()
             if ns and ns not in SYSTEM_NAMESPACES
+        )
+
+    def get_services(self, namespace: str, timeout: int | None = None) -> str:
+        return self.run('get', 'services', '-n', namespace, timeout=timeout)
+
+    def get_secrets(self, namespace: str, timeout: int | None = None) -> str:
+        return self.run('get', 'secrets', '-n', namespace, timeout=timeout)
+
+    def get_cronjobs(self, namespace: str, timeout: int | None = None) -> str:
+        return self.run('get', 'cronjobs', '-n', namespace, timeout=timeout)
+
+    def get_events(self, namespace: str, timeout: int | None = None) -> str:
+        return self.run('get', 'events', '-n', namespace, '--sort-by=.lastTimestamp', timeout=timeout)
+
+    def get_logs(self, pod: str, namespace: str, tail: int = 20, timeout: int | None = None) -> str:
+        return self.run('logs', f'--tail={tail}', pod, '-n', namespace, timeout=timeout)
+
+    def follow_logs(self, pod: str, namespace: str, tail: int = 50) -> None:
+        self.stream('logs', '-f', f'--tail={tail}', pod, '-n', namespace)
+
+    def list_configmaps(self, namespace: str, timeout: int | None = None) -> list[str]:
+        out = self.run(
+            'get', 'configmaps', '-n', namespace, '-o',
+            'jsonpath={range .items[*]}{.metadata.name}{"\\n"}{end}',
+            timeout=timeout,
+        )
+        return [c for c in out.strip().splitlines() if c]
+
+    def get_configmap_yaml(self, name: str, namespace: str, timeout: int | None = None) -> str:
+        return self.run('get', 'configmap', name, '-n', namespace, '-o', 'yaml', timeout=timeout)
+
+    def describe(self, resource: str, namespace: str, timeout: int | None = None) -> str:
+        return self.run('describe', resource, '-n', namespace, timeout=timeout)
+
+    def list_resources(self, namespace: str, timeout: int | None = None) -> list[str]:
+        # List common resource names for interactive picker
+        out = self.run(
+            'get', 'pods,deployments,services,configmaps', '-n', namespace,
+            '--no-headers', '-o', 'name', timeout=timeout,
+        )
+        return [r for r in out.strip().splitlines() if r]
+
+    def get_resources_summary(self, namespace: str, timeout: int | None = None) -> str:
+        return self.run(
+            'get', 'nodes,pods,deployments,services', '-n', namespace,
+            '--no-headers', timeout=timeout,
         )
 
 
@@ -139,6 +198,10 @@ class SshKubeCtl(KubeCtl):
         if result.returncode != 0:
             raise RuntimeError(result.stderr.strip() or f'SSH command failed on {self._host}')
         return result.stdout
+
+    def stream(self, *args: str) -> None:
+        remote_cmd = shlex.join(self._base_cmd() + list(args))
+        subprocess.run(['ssh', '-n', '--', self._host, remote_cmd])
 
 
 # -- Factory -----------------------------------------------------------------

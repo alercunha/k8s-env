@@ -24,6 +24,23 @@ class Env:
     namespace: str = ''
 
 
+def _parse_env_file(path: str) -> Env:
+    # Parse key=value pairs, skip port-forward lines (pf.*)
+    fields: dict[str, str] = {}
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if '=' in line and not line.startswith('pf.'):
+                key, _, val = line.partition('=')
+                fields[key] = val
+    return Env(
+        tool=fields.get('tool', ''),
+        ssh_host=fields.get('ssh_host', ''),
+        context=fields.get('context', ''),
+        namespace=fields.get('namespace', ''),
+    )
+
+
 def resolve_env(ctx: AppContext) -> None:
     # Local file wins unless -g forces global mode
     if not ctx.global_mode and os.path.isfile(ENV_FILE):
@@ -36,14 +53,24 @@ def resolve_env(ctx: AppContext) -> None:
     raise SystemExit('No environment set. Run: k8s-env use')
 
 
-def list_profiles() -> list[str]:
+@dataclass
+class Profile:
+    name: str
+    env: Env
+
+
+def list_profiles() -> list[Profile]:
     if not os.path.isdir(PROFILES_DIR):
         return []
-    return sorted(
-        f.removesuffix('.env')
-        for f in os.listdir(PROFILES_DIR)
-        if f.endswith('.env')
-    )
+    profiles: list[Profile] = []
+    for fname in sorted(os.listdir(PROFILES_DIR)):
+        if not fname.endswith('.env'):
+            continue
+        profiles.append(Profile(
+            name=fname.removesuffix('.env'),
+            env=_parse_env_file(os.path.join(PROFILES_DIR, fname)),
+        ))
+    return profiles
 
 
 def save_global(env: Env, name: str) -> None:
@@ -93,21 +120,7 @@ def load_env(ctx: AppContext) -> Env:
     if not os.path.isfile(path):
         raise SystemExit('No environment set. Run: k8s-env use')
 
-    # Parse core key=value pairs, skip port-forward lines (pf.*)
-    fields: dict[str, str] = {}
-    with open(path) as f:
-        for line in f:
-            line = line.strip()
-            if '=' in line and not line.startswith('pf.'):
-                key, _, val = line.partition('=')
-                fields[key] = val
-
-    env = Env(
-        tool=fields.get('tool', ''),
-        ssh_host=fields.get('ssh_host', ''),
-        context=fields.get('context', ''),
-        namespace=fields.get('namespace', ''),
-    )
+    env = _parse_env_file(path)
 
     # Validate all non-empty fields
     validate('tool', env.tool)
