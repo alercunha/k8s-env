@@ -59,7 +59,10 @@ def print_filtered(output: str, filter_text: str) -> None:
 
 # -- Picker -------------------------------------------------------------------
 
-def pick(title: str, items: list[str], auto: bool = False, multi: bool = False) -> list[tuple[int, str]]:
+def pick(
+    title: str, items: list[str], *,
+    groups: list[str] | None = None, auto: bool = False, multi: bool = False,
+) -> list[tuple[int, str]]:
     if not items:
         raise SystemExit('No items to select from')
 
@@ -68,9 +71,17 @@ def pick(title: str, items: list[str], auto: bool = False, multi: bool = False) 
         print(f'{_BOLD}{title}:{_NC} {items[0]}')
         return [(0, items[0])]
 
+    # Display items, optionally grouped by adjacent group names
     print(f'{_BOLD}{title}:{_NC}')
-    for i, item in enumerate(items, 1):
-        print(f'  {_CYAN}{i}){_NC} {item}')
+    current_group = ''
+    indent = '    ' if groups else '  '
+    for i, item in enumerate(items):
+        if groups and groups[i] != current_group:
+            if current_group:
+                print()
+            current_group = groups[i]
+            print(f'  {_YELLOW}{current_group}{_NC}')
+        print(f'{indent}{_CYAN}{i + 1}){_NC} {item}')
     print()
 
     if multi:
@@ -102,29 +113,11 @@ def cmd_use(ctx: AppContext) -> None:
     if not entries:
         raise SystemExit('No namespaces found (checked microk8s, minikube, and kubectl contexts)')
 
-    # Display entries grouped by runtime/context
-    current_group = ''
-    print(f'{_BOLD}Available namespaces:{_NC}\n')
-    for i, entry in enumerate(entries, 1):
-        if entry.group != current_group:
-            if current_group:
-                print()
-            current_group = entry.group
-            print(f'  {_YELLOW}{current_group}{_NC}')
-        print(f'    {_CYAN}{i}){_NC} {entry.namespace}')
-    print()
+    labels = [e.namespace for e in entries]
+    groups = [e.group for e in entries]
+    selected = entries[pick('Available namespaces', labels, groups=groups)[0][0]]
 
-    raw = input(f'Select namespace [1-{len(entries)}]: ')
-    if not raw.strip().isdigit() or not (1 <= int(raw) <= len(entries)):
-        raise SystemExit('Invalid selection')
-
-    # Save selected environment
-    selected = entries[int(raw) - 1]
-    env = service.Env(
-        tool=selected.tool,
-        context=selected.context,
-        namespace=selected.namespace,
-    )
+    env = service.Env(tool=selected.tool, context=selected.context, namespace=selected.namespace)
     service.save_env(env, ctx)
     print()
     print_status(f'Set to {_BOLD}{selected.group}{_NC} namespace: {_BOLD}{selected.namespace}{_NC}')
@@ -138,19 +131,14 @@ def cmd_use_remote(ctx: AppContext, host: str) -> None:
     if not entries:
         raise SystemExit(f'No custom namespaces found on {host} (checked microk8s and minikube)')
 
-    labels = [f'{e.namespace} {_DIM}({e.group}){_NC}' for e in entries]
-    selected_list = pick(f'Namespaces on {host}', labels)
-    selected = entries[selected_list[0][0]]
+    labels = [e.namespace for e in entries]
+    groups = [e.tool for e in entries]
+    selected = entries[pick(f'Namespaces on {host}', labels, groups=groups)[0][0]]
 
-    env = service.Env(
-        tool=selected.tool,
-        ssh_host=host,
-        namespace=selected.namespace,
-    )
+    env = service.Env(tool=selected.tool, ssh_host=host, namespace=selected.namespace)
     service.save_env(env, ctx)
     print()
-    runtime = selected.tool.removesuffix('-ssh')
-    print_status(f'Set to {_YELLOW}{runtime} ssh{_NC} host: {_BOLD}{host}{_NC} namespace: {_BOLD}{selected.namespace}{_NC}')
+    print_status(f'Set to {_YELLOW}{selected.tool} ssh{_NC} host: {_BOLD}{host}{_NC} namespace: {_BOLD}{selected.namespace}{_NC}')
 
 
 def cmd_namespaces(ctx: AppContext) -> None:

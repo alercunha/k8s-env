@@ -99,12 +99,14 @@ class NamespaceEntry:
     group: str  # display group label
 
 
-def _probe_namespaces(kubectl: k8s.KubeCtl, tool: str, group: str, context: str = '') -> list[NamespaceEntry]:
+def _probe_namespaces(kubectl: k8s.KubeCtl, location: str) -> list[NamespaceEntry]:
+    # Derive tool, context, and group label from the kubectl instance
     try:
         namespaces = kubectl.list_custom_namespaces(timeout=DISCOVERY_TIMEOUT)
     except (RuntimeError, OSError):
         return []
-    return [NamespaceEntry(tool=tool, context=context, namespace=ns, group=group) for ns in namespaces]
+    group = f'{kubectl.tool_name} on {location}'
+    return [NamespaceEntry(tool=kubectl.tool_name, context=kubectl.context, namespace=ns, group=group) for ns in namespaces]
 
 
 def _minikube_running() -> bool:
@@ -135,10 +137,10 @@ def discover_local() -> list[NamespaceEntry]:
     probes: list[tuple] = []
 
     if is_available('microk8s'):
-        probes.append((k8s.get('microk8s'), 'microk8s', 'microk8s (local)'))
+        probes.append((k8s.get('microk8s'), 'local'))
 
     if is_available('minikube') and _minikube_running():
-        probes.append((k8s.get('minikube'), 'minikube', 'minikube (local)'))
+        probes.append((k8s.get('minikube'), 'local'))
 
     # Add one probe per kubectl context (skip minikube, handled above)
     if is_available('kubectl'):
@@ -151,10 +153,7 @@ def discover_local() -> list[NamespaceEntry]:
             out = ''
         for ctx_name in out.strip().splitlines():
             if ctx_name and ctx_name != 'minikube':
-                probes.append((
-                    k8s.get('k8s', context=ctx_name),
-                    'k8s', f'k8s context: {ctx_name}', ctx_name,
-                ))
+                probes.append((k8s.get('k8s', context=ctx_name), f'context: {ctx_name}'))
 
     return _collect_probes(probes) if probes else []
 
@@ -162,6 +161,6 @@ def discover_local() -> list[NamespaceEntry]:
 def discover_remote(host: str) -> list[NamespaceEntry]:
     validate('host', host)
     return _collect_probes([
-        (k8s.get('microk8s-ssh', ssh_host=host), 'microk8s-ssh', f'microk8s on {host}'),
-        (k8s.get('minikube-ssh', ssh_host=host), 'minikube-ssh', f'minikube on {host}'),
+        (k8s.get('microk8s', ssh_host=host), host),
+        (k8s.get('minikube', ssh_host=host), host),
     ])
