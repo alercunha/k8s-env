@@ -19,6 +19,7 @@ _VALIDATORS = {
     'context':   re.compile(r'^[A-Za-z0-9._:@/-]+$'),
     'namespace': re.compile(r'^[a-z0-9][-a-z0-9]*[a-z0-9]?$'),
     'host':      re.compile(r'^[A-Za-z0-9._@:/-]+$'),
+    'profile':   re.compile(r'^[a-z0-9][-a-z0-9]*$'),
 }
 
 
@@ -37,6 +38,7 @@ class AppContext:
     env: Env | None = None
     kubectl: KubeCtl | None = None
     ns_override: str = ''
+    global_mode: bool = False
     env_path: str = ENV_FILE
 
     @property

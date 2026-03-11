@@ -1,1 +1,16 @@
+# Python
+__pycache__/
 **/*.pyc
+*.pyo
+*.egg-info/
+
+# Environment
+.k8s-env
+*.env
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~

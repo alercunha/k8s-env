@@ -3,7 +3,7 @@ import os
 import sys
 
 from k8s_env import service
-from k8s_env.utils import AppContext
+from k8s_env.utils import AppContext, ENV_FILE
 
 # -- Colors -------------------------------------------------------------------
 
@@ -108,7 +108,44 @@ def pick(
 
 # -- Commands -----------------------------------------------------------------
 
+def _use_global(ctx: AppContext) -> bool:
+    return ctx.global_mode or not os.path.isfile(ctx.env_path)
+
+
+def _try_activate_existing(ctx: AppContext) -> bool:
+    # In global mode, offer existing profiles before running discovery
+    if not _use_global(ctx):
+        return False
+    profiles = service.list_profiles()
+    if not profiles:
+        return False
+    items = profiles + ['+ Discover new...']
+    choice = pick('Global profiles', items)[0]
+    if choice[0] >= len(profiles):
+        return False
+    service.activate_profile(profiles[choice[0]])
+    print()
+    print_status(f'Activated global profile {_BOLD}{profiles[choice[0]]}{_NC}')
+    return True
+
+
+def _save_discovered(ctx: AppContext, env: service.Env, label: str) -> None:
+    # After discovery, save to global profile or local .k8s-env
+    if _use_global(ctx):
+        name = input('\nProfile name (lowercase kebab-case): ').strip()
+        service.save_global(env, name)
+        print()
+        print_status(f'Saved global profile {_BOLD}{name}{_NC} → {label}')
+    else:
+        service.save_env(env, ctx)
+        print()
+        print_status(f'Set to {label}')
+
+
 def cmd_use(ctx: AppContext) -> None:
+    if _try_activate_existing(ctx):
+        return
+
     entries = service.discover_local()
     if not entries:
         raise SystemExit('No namespaces found (checked microk8s, minikube, and kubectl contexts)')
@@ -118,14 +155,16 @@ def cmd_use(ctx: AppContext) -> None:
     selected = entries[pick('Available namespaces', labels, groups=groups)[0][0]]
 
     env = service.Env(tool=selected.tool, context=selected.context, namespace=selected.namespace)
-    service.save_env(env, ctx)
-    print()
-    print_status(f'Set to {_BOLD}{selected.group}{_NC} namespace: {_BOLD}{selected.namespace}{_NC}')
+    _save_discovered(ctx, env, f'{_BOLD}{selected.group}{_NC} namespace: {_BOLD}{selected.namespace}{_NC}')
 
 
 def cmd_use_remote(ctx: AppContext, host: str) -> None:
+    if not host and _try_activate_existing(ctx):
+        return
     if not host:
-        raise SystemExit('Usage: k8s-env use-remote <hostname>')
+        host = input('Remote host: ').strip()
+        if not host:
+            raise SystemExit('No host provided')
 
     entries = service.discover_remote(host)
     if not entries:
@@ -136,9 +175,23 @@ def cmd_use_remote(ctx: AppContext, host: str) -> None:
     selected = entries[pick(f'Namespaces on {host}', labels, groups=groups)[0][0]]
 
     env = service.Env(tool=selected.tool, ssh_host=host, namespace=selected.namespace)
-    service.save_env(env, ctx)
-    print()
-    print_status(f'Set to {_YELLOW}{selected.tool} ssh{_NC} host: {_BOLD}{host}{_NC} namespace: {_BOLD}{selected.namespace}{_NC}')
+    _save_discovered(ctx, env, f'{_YELLOW}{selected.tool} ssh{_NC} host: {_BOLD}{host}{_NC} namespace: {_BOLD}{selected.namespace}{_NC}')
+
+
+def cmd_ctx(ctx: AppContext) -> None:
+    # Instant one-liner showing active environment source and target
+    service.load_env(ctx)
+    env = ctx.env
+    profile = service.active_profile_name()
+    source = profile if ctx.env_path != ENV_FILE else 'local'
+    parts = [env.tool]
+    if env.ssh_host:
+        parts.append(f'on {env.ssh_host}')
+    if env.context:
+        parts.append(f'on context: {env.context}')
+    if not env.ssh_host and not env.context:
+        parts.append('on local')
+    print(f'{_CYAN}[{source}]{_NC} {" ".join(parts)} / {_BOLD}{env.namespace}{_NC}')
 
 
 def cmd_namespaces(ctx: AppContext) -> None:
@@ -160,16 +213,18 @@ def cmd_pods(ctx: AppContext, filter_text: str) -> None:
 
 def show_help(ctx: AppContext) -> None:
     print(f'{_BOLD}k8s-env{_NC} — Kubernetes environment helper\n')
-    print(f'{_BOLD}Usage:{_NC} k8s-env <command> [args] [-n namespace]\n')
+    print(f'{_BOLD}Usage:{_NC} k8s-env <command> [args] [-n namespace] [-g]\n')
     print(f'{_BOLD}Environment:{_NC}')
-    print('  use                    Pick namespace from local microk8s/minikube + k8s contexts')
+    print('  use                    Pick namespace (local .k8s-env or global profile)')
     print('  use-remote <host>      Pick namespace from remote microk8s/minikube via SSH')
+    print('  ctx                    Show active environment (no cluster queries)')
     print()
     print(f'{_BOLD}Inspection:{_NC}')
     print('  pods [filter]          List pods (filter by name)')
     print('  namespaces             List all namespaces')
     print()
     print(f'{_BOLD}Options:{_NC}')
+    print('  -g, --global           Force global profile mode')
     print('  -n <namespace>         Override saved namespace')
     print('  -h, --help             Show this help')
     print()
@@ -187,6 +242,7 @@ def show_help(ctx: AppContext) -> None:
 _COMMANDS = {
     'use':        lambda ctx, _arg: cmd_use(ctx),
     'use-remote': lambda ctx, arg: cmd_use_remote(ctx, arg),
+    'ctx':        lambda ctx, _arg: cmd_ctx(ctx),
     'namespaces': lambda ctx, _arg: cmd_namespaces(ctx),
     'ns':         lambda ctx, _arg: cmd_namespaces(ctx),
     'pods':       lambda ctx, arg: cmd_pods(ctx, arg),
@@ -196,6 +252,7 @@ _COMMANDS = {
 def main() -> None:
     # Parse flags and positional args (command + optional arg)
     ns_override = ''
+    global_mode = False
     positional: list[str] = []
     show_help_flag = False
 
@@ -205,6 +262,9 @@ def main() -> None:
         if args[i] == '-n' and i + 1 < len(args):
             ns_override = args[i + 1]
             i += 2
+        elif args[i] in ('-g', '--global'):
+            global_mode = True
+            i += 1
         elif args[i] in ('-h', '--help'):
             show_help_flag = True
             i += 1
@@ -212,7 +272,7 @@ def main() -> None:
             positional.append(args[i])
             i += 1
 
-    ctx = AppContext(ns_override=ns_override)
+    ctx = AppContext(ns_override=ns_override, global_mode=global_mode)
     command = positional[0] if positional else ''
     arg = positional[1] if len(positional) > 1 else ''
 

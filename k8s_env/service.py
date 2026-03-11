@@ -5,9 +5,15 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 
 from k8s_env import k8s
-from k8s_env.utils import AppContext, is_available, validate
+from k8s_env.utils import AppContext, ENV_FILE, is_available, validate
 
 DISCOVERY_TIMEOUT = 10
+
+GLOBAL_DIR = os.path.join(
+    os.environ.get('XDG_CONFIG_HOME', os.path.expanduser('~/.config')), 'k8s-env',
+)
+PROFILES_DIR = os.path.join(GLOBAL_DIR, 'profiles')
+ACTIVE_LINK = os.path.join(GLOBAL_DIR, 'active')
 
 
 @dataclass
@@ -18,9 +24,70 @@ class Env:
     namespace: str = ''
 
 
+def resolve_env(ctx: AppContext) -> None:
+    # Local file wins unless -g forces global mode
+    if not ctx.global_mode and os.path.isfile(ENV_FILE):
+        ctx.env_path = ENV_FILE
+        return
+    # Fall through to global active profile
+    if os.path.islink(ACTIVE_LINK):
+        ctx.env_path = os.path.realpath(ACTIVE_LINK)
+        return
+    raise SystemExit('No environment set. Run: k8s-env use')
+
+
+def list_profiles() -> list[str]:
+    if not os.path.isdir(PROFILES_DIR):
+        return []
+    return sorted(
+        f.removesuffix('.env')
+        for f in os.listdir(PROFILES_DIR)
+        if f.endswith('.env')
+    )
+
+
+def save_global(env: Env, name: str) -> None:
+    validate('profile', name)
+    os.makedirs(PROFILES_DIR, exist_ok=True)
+
+    # Write profile file with restricted permissions
+    path = os.path.join(PROFILES_DIR, f'{name}.env')
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, 'w') as f:
+        f.write(f'tool={env.tool}\n')
+        f.write(f'ssh_host={env.ssh_host}\n')
+        f.write(f'context={env.context}\n')
+        f.write(f'namespace={env.namespace}\n')
+
+    # Atomically update active symlink
+    tmp = ACTIVE_LINK + '.tmp'
+    os.symlink(path, tmp)
+    os.replace(tmp, ACTIVE_LINK)
+
+
+def activate_profile(name: str) -> None:
+    path = os.path.join(PROFILES_DIR, f'{name}.env')
+    if not os.path.isfile(path):
+        raise SystemExit(f'Profile not found: {name}')
+    tmp = ACTIVE_LINK + '.tmp'
+    os.symlink(path, tmp)
+    os.replace(tmp, ACTIVE_LINK)
+
+
+def active_profile_name() -> str:
+    if not os.path.islink(ACTIVE_LINK):
+        return ''
+    target = os.path.basename(os.readlink(ACTIVE_LINK))
+    return target.removesuffix('.env')
+
+
 def load_env(ctx: AppContext) -> Env:
     if ctx.env:
         return ctx.env
+
+    # Resolve env_path if still at the default
+    if ctx.env_path == ENV_FILE and (ctx.global_mode or not os.path.isfile(ENV_FILE)):
+        resolve_env(ctx)
 
     path = ctx.env_path
     if not os.path.isfile(path):
