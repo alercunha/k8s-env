@@ -1,0 +1,796 @@
+#!/bin/bash
+set -euo pipefail
+
+# Generic Kubernetes helper script
+# Saves state to .k8s-env in the current directory
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+DIM='\033[2m'
+NC='\033[0m'
+
+ENV_FILE=".k8s-env"
+
+# --- Helpers ---
+
+print_status()  { echo -e "${GREEN}[INFO]${NC} $1"; }
+print_warning() { echo -e "${YELLOW}[WARN]${NC} $1"; }
+print_error()   { echo -e "${RED}[ERROR]${NC} $1" >&2; }
+print_header()  { echo -e "${CYAN}${BOLD}--- $1 ---${NC}"; }
+
+# Print output with optional case-insensitive filter (preserves header row)
+print_filtered() {
+    local output="$1" filter="$2"
+    if [ -n "$filter" ]; then
+        echo "$output" | head -1
+        echo "$output" | tail -n +2 | grep -i "$filter" || true
+    else
+        echo "$output"
+    fi
+}
+
+# Validate a value matches safe characters only
+validate_value() {
+    local name="$1" value="$2" pattern="$3"
+    if ! [[ "$value" =~ ^$pattern$ ]]; then
+        print_error "Invalid $name: '$value'"
+        exit 1
+    fi
+}
+
+validate_host()      { validate_value "host" "$1" '[A-Za-z0-9._@:/-]+'; }
+validate_context()   { validate_value "context" "$1" '[A-Za-z0-9._:@/-]+'; }
+validate_namespace() { validate_value "namespace" "$1" '[a-z0-9][-a-z0-9]*[a-z0-9]?'; }
+validate_tool()      { validate_value "tool" "$1" '(microk8s|microk8s-ssh|minikube|minikube-ssh|k8s)'; }
+
+# Interactive picker: pick [--auto] [--multi] "Title" item1 item2 ...
+# Sets PICKED and PICKED_IDX (arrays when --multi, single-element otherwise)
+# --auto: auto-select when only one item
+# --multi: accept comma-separated selections (e.g. "1,3") or "all"
+pick() {
+    local auto=false multi=false
+    while [[ "$1" == --* ]]; do
+        case "$1" in
+            --auto)  auto=true ;;
+            --multi) multi=true ;;
+        esac
+        shift
+    done
+    local title="$1"; shift
+    local items=("$@")
+    local max=${#items[@]}
+
+    if [ $max -eq 0 ]; then
+        return 1
+    fi
+
+    if [ "$auto" = true ] && [ $max -eq 1 ]; then
+        PICKED=("${items[0]}") PICKED_IDX=(0)
+        echo -e "${BOLD}$title:${NC} ${items[0]}"
+        return
+    fi
+
+    echo -e "${BOLD}$title:${NC}"
+    local i=1
+    for item in "${items[@]}"; do
+        echo -e "  ${CYAN}$i)${NC} $item"
+        i=$((i + 1))
+    done
+
+    echo ""
+    if [ "$multi" = true ]; then
+        read -rp "Select [1-${max}, comma-separated or 'all']: " input
+    else
+        read -rp "Select [1-${max}]: " input
+    fi
+
+    # Resolve "all" to full range
+    if [ "$multi" = true ] && [ "$input" = "all" ]; then
+        input=$(seq -s, 1 "$max")
+    fi
+
+    PICKED=() PICKED_IDX=()
+    IFS=',' read -ra selections <<< "$input"
+    for choice in "${selections[@]}"; do
+        choice="${choice// /}"
+        if ! [[ "$choice" =~ ^[0-9]+$ ]] || [ "$choice" -lt 1 ] || [ "$choice" -gt "$max" ]; then
+            print_error "Invalid selection: $choice"
+            exit 1
+        fi
+        PICKED_IDX+=($((choice-1)))
+        PICKED+=("${items[$((choice-1))]}")
+    done
+
+    if [ ${#PICKED[@]} -eq 0 ]; then
+        print_error "No selection made"
+        exit 1
+    fi
+}
+
+
+# Print environment banner
+print_env_banner() {
+    if [ -f "$ENV_FILE" ]; then
+        case "$ENV_TOOL" in
+            microk8s)     echo -e "${YELLOW}[microk8s local]${NC} namespace: ${BOLD}$ENV_NS${NC}" ;;
+            microk8s-ssh) echo -e "${YELLOW}[microk8s ssh]${NC} host: ${BOLD}$ENV_SSH_HOST${NC} | namespace: ${BOLD}$ENV_NS${NC}" ;;
+            minikube)     echo -e "${YELLOW}[minikube local]${NC} namespace: ${BOLD}$ENV_NS${NC}" ;;
+            minikube-ssh) echo -e "${YELLOW}[minikube ssh]${NC} host: ${BOLD}$ENV_SSH_HOST${NC} | namespace: ${BOLD}$ENV_NS${NC}" ;;
+            k8s)          echo -e "${CYAN}[k8s remote]${NC} context: ${BOLD}$ENV_CTX${NC} | namespace: ${BOLD}$ENV_NS${NC}" ;;
+        esac
+    fi
+}
+
+# Parse .k8s-env into ENV_* variables (single pass, validated)
+load_env_vars() {
+    ENV_TOOL="" ENV_CTX="" ENV_NS="" ENV_SSH_HOST=""
+    while IFS='=' read -r key val; do
+        case "$key" in
+            tool)      ENV_TOOL="$val" ;;
+            context)   ENV_CTX="$val" ;;
+            namespace) ENV_NS="$val" ;;
+            ssh_host)  ENV_SSH_HOST="$val" ;;
+        esac
+    done < "$ENV_FILE"
+}
+
+# Load saved config, validate, and set KUBECTL_CMD array + SSH_HOST
+load_env() {
+    if [ ! -f "$ENV_FILE" ]; then
+        print_error "No environment set. Run: k8s use"
+        exit 1
+    fi
+    load_env_vars
+    validate_tool "$ENV_TOOL"
+    [ -n "$ENV_NS" ] && validate_namespace "$ENV_NS"
+    [ -n "$ENV_CTX" ] && validate_context "$ENV_CTX"
+    [ -n "$ENV_SSH_HOST" ] && validate_host "$ENV_SSH_HOST"
+
+    SSH_HOST="$ENV_SSH_HOST"
+    case "$ENV_TOOL" in
+        microk8s|microk8s-ssh) KUBECTL_CMD=(microk8s kubectl) ;;
+        minikube|minikube-ssh) KUBECTL_CMD=(kubectl --context minikube) ;;
+        k8s)                  KUBECTL_CMD=(kubectl --context "$ENV_CTX") ;;
+    esac
+}
+
+# Run kubectl, routing through SSH if needed
+run_kubectl() {
+    if [ -n "$SSH_HOST" ]; then
+        local quoted
+        quoted=$(printf '%q ' "${KUBECTL_CMD[@]}" "$@")
+        ssh -n -- "$SSH_HOST" "$quoted"
+    else
+        "${KUBECTL_CMD[@]}" "$@"
+    fi
+}
+
+# Get the saved namespace, or use the argument
+get_namespace() {
+    local ns="${1:-}"
+    if [ -n "$ns" ]; then
+        echo "$ns"
+    elif [ -n "$ENV_NS" ]; then
+        echo "$ENV_NS"
+    else
+        print_error "No namespace set. Run: k8s use"
+        exit 1
+    fi
+}
+
+# Write env file with restricted permissions (preserves pf.* lines)
+save_env() {
+    local tool="$1" ssh_host="$2" context="$3" namespace="$4"
+    if [ -L "$ENV_FILE" ]; then
+        print_error "$ENV_FILE is a symlink — refusing to write"
+        exit 1
+    fi
+    local pf_lines=""
+    if [ -f "$ENV_FILE" ]; then
+        pf_lines=$(grep '^pf\.' "$ENV_FILE" 2>/dev/null || true)
+    fi
+    (umask 077; cat > "$ENV_FILE" <<EOF
+tool=$tool
+ssh_host=$ssh_host
+context=$context
+namespace=$namespace
+EOF
+    )
+    if [ -n "$pf_lines" ]; then
+        echo "$pf_lines" >> "$ENV_FILE"
+    fi
+}
+
+# Save a port-forward mapping to .k8s-env
+save_forward() {
+    local svc="$1" remote_port="$2" local_port="$3"
+    local key="pf.${svc}.${remote_port}"
+    [ -f "$ENV_FILE" ] || return 0
+    local tmp
+    tmp=$(grep -v "^${key}=" "$ENV_FILE" 2>/dev/null || true)
+    (umask 077; printf '%s\n' "$tmp" > "$ENV_FILE")
+    echo "${key}=${local_port}" >> "$ENV_FILE"
+}
+
+# Load a saved port-forward mapping from .k8s-env
+load_forward() {
+    local svc="$1" remote_port="$2"
+    local key="pf.${svc}.${remote_port}"
+    if [ -f "$ENV_FILE" ]; then
+        { grep "^${key}=" "$ENV_FILE" 2>/dev/null || true; } | tail -1 | cut -d= -f2
+    fi
+}
+
+# Load env + print banner + resolve namespace (used by most commands)
+require_env() {
+    load_env
+    print_env_banner
+    NS=$(get_namespace "$NS_ARG")
+}
+
+# List non-system namespaces for a local kubectl command array
+list_custom_namespaces() {
+    local cmd=("$@")
+    "${cmd[@]}" get namespaces -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null \
+        | grep -vE '^(kube-system|kube-public|kube-node-lease|default)$' \
+        | sort
+}
+
+# List non-system namespaces on a remote host via SSH
+list_remote_namespaces() {
+    local host="$1"; shift
+    local quoted
+    quoted=$(printf '%q ' "$@" get namespaces -o 'jsonpath={range .items[*]}{.metadata.name}{"\n"}{end}')
+    ssh -n -- "$host" "$quoted" 2>/dev/null \
+        | grep -vE '^(kube-system|kube-public|kube-node-lease|default)$' \
+        | sort
+}
+
+# --- Parse arguments ---
+
+FOLLOW=""
+NEW_TOKEN=false
+NS_ARG=""
+ARGS=()
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -f) FOLLOW="-f" ;;
+        -t) NEW_TOKEN=true ;;
+        -n) NS_ARG="${2:-}"; shift ;;
+        *)  ARGS+=("$1") ;;
+    esac
+    shift
+done
+CMD="${ARGS[0]:-}"
+ARG="${ARGS[1]:-}"
+
+# --- Commands ---
+
+cmd_use() {
+    local i=1
+    local entries=()  # each entry: "tool|context|namespace"
+
+    echo -e "${BOLD}Available namespaces:${NC}"
+    echo ""
+
+    # microk8s namespaces
+    if command -v microk8s &>/dev/null; then
+        local mk8s_ns
+        mk8s_ns=$(list_custom_namespaces microk8s kubectl) || true
+        if [ -n "$mk8s_ns" ]; then
+            echo -e "  ${YELLOW}microk8s (local)${NC}"
+            while IFS= read -r ns; do
+                entries+=("microk8s||$ns")
+                echo -e "    ${CYAN}$i)${NC} $ns"
+                i=$((i + 1))
+            done <<< "$mk8s_ns"
+            echo ""
+        fi
+    fi
+
+    # minikube namespaces
+    if command -v minikube &>/dev/null && minikube status &>/dev/null; then
+        local mini_ns
+        mini_ns=$(list_custom_namespaces kubectl --context minikube) || true
+        if [ -n "$mini_ns" ]; then
+            echo -e "  ${YELLOW}minikube (local)${NC}"
+            while IFS= read -r ns; do
+                entries+=("minikube||$ns")
+                echo -e "    ${CYAN}$i)${NC} $ns"
+                i=$((i + 1))
+            done <<< "$mini_ns"
+            echo ""
+        fi
+    fi
+
+    # k8s contexts and their namespaces (skip minikube — listed above)
+    if command -v kubectl &>/dev/null; then
+        local contexts
+        contexts=$(kubectl config get-contexts -o name 2>/dev/null | grep -v '^minikube$') || true
+        if [ -n "$contexts" ]; then
+            while IFS= read -r ctx; do
+                local k8s_ns
+                k8s_ns=$(list_custom_namespaces kubectl --context "$ctx") || true
+                if [ -n "$k8s_ns" ]; then
+                    echo -e "  ${CYAN}k8s context: ${BOLD}$ctx${NC}"
+                    while IFS= read -r ns; do
+                        entries+=("k8s|$ctx|$ns")
+                        echo -e "    ${CYAN}$i)${NC} $ns"
+                        i=$((i + 1))
+                    done <<< "$k8s_ns"
+                    echo ""
+                fi
+            done <<< "$contexts"
+        fi
+    fi
+
+    if [ ${#entries[@]} -eq 0 ]; then
+        print_error "No namespaces found (checked microk8s, minikube, and kubectl contexts)"
+        exit 1
+    fi
+
+    read -rp "Select namespace [1-$((i-1))]: " choice
+
+    if ! [[ "$choice" =~ ^[0-9]+$ ]] || [ "$choice" -lt 1 ] || [ "$choice" -gt "${#entries[@]}" ]; then
+        print_error "Invalid selection"
+        exit 1
+    fi
+
+    local selected="${entries[$((choice-1))]}"
+    local tool ctx ns
+    tool=$(echo "$selected" | cut -d'|' -f1)
+    ctx=$(echo "$selected" | cut -d'|' -f2)
+    ns=$(echo "$selected" | cut -d'|' -f3)
+
+    save_env "$tool" "" "$ctx" "$ns"
+
+    echo ""
+    case "$tool" in
+        microk8s) print_status "Set to ${YELLOW}microk8s (local)${NC} namespace: ${BOLD}$ns${NC}" ;;
+        minikube) print_status "Set to ${YELLOW}minikube (local)${NC} namespace: ${BOLD}$ns${NC}" ;;
+        k8s)      print_status "Set to ${CYAN}k8s remote${NC} context: ${BOLD}$ctx${NC} namespace: ${BOLD}$ns${NC}" ;;
+    esac
+}
+
+cmd_use_remote() {
+    local host="$ARG"
+    if [ -z "$host" ]; then
+        print_error "Usage: k8s use-remote <hostname>"
+        exit 1
+    fi
+    validate_host "$host"
+
+    # Try microk8s first, then minikube
+    local tool="" namespaces=""
+    local mk8s_ns mini_ns
+    mk8s_ns=$(list_remote_namespaces "$host" microk8s kubectl 2>/dev/null) || true
+    mini_ns=$(list_remote_namespaces "$host" kubectl --context minikube 2>/dev/null) || true
+
+    local entries=() labels=()
+    if [ -n "$mk8s_ns" ]; then
+        while IFS= read -r ns; do
+            entries+=("microk8s-ssh|$ns")
+            labels+=("$ns ${DIM}(microk8s)${NC}")
+        done <<< "$mk8s_ns"
+    fi
+    if [ -n "$mini_ns" ]; then
+        while IFS= read -r ns; do
+            entries+=("minikube-ssh|$ns")
+            labels+=("$ns ${DIM}(minikube)${NC}")
+        done <<< "$mini_ns"
+    fi
+
+    if [ ${#entries[@]} -eq 0 ]; then
+        print_error "No custom namespaces found on $host (checked microk8s and minikube)"
+        exit 1
+    fi
+
+    pick "Namespaces on $host" "${labels[@]}"
+
+    local selected="${entries[${PICKED_IDX[0]}]}"
+    tool=$(echo "$selected" | cut -d'|' -f1)
+    local ns=$(echo "$selected" | cut -d'|' -f2)
+
+    save_env "$tool" "$host" "" "$ns"
+
+    echo ""
+    local runtime="${tool%-ssh}"
+    print_status "Set to ${YELLOW}$runtime ssh${NC} host: ${BOLD}$host${NC} namespace: ${BOLD}$ns${NC}"
+}
+
+cmd_pods() {
+    require_env
+    print_status "Pods in ${BOLD}$NS${NC}"
+    print_filtered "$(run_kubectl get pods -n "$NS" -o wide)" "${ARG:-}"
+}
+
+cmd_logs() {
+    require_env
+    local filter="${ARG:-}"
+
+    local pods
+    pods=$(run_kubectl get pods -n "$NS" -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}')
+
+    if [ -n "$filter" ]; then
+        pods=$(echo "$pods" | grep -i "$filter" || true)
+    fi
+
+    if [ -z "$pods" ]; then
+        print_warning "No pods found in $NS"
+        exit 0
+    fi
+
+    if [ -n "$FOLLOW" ]; then
+        local pod_array=()
+        readarray -t pod_array <<< "$pods"
+        pick --auto "Follow logs for" "${pod_array[@]}"
+        print_status "Tailing ${BOLD}$PICKED${NC} (Ctrl+C to stop)"
+        run_kubectl logs -f --tail=50 "$PICKED" -n "$NS"
+    else
+        while IFS= read -r pod; do
+            echo ""
+            print_header "$pod"
+            run_kubectl logs --tail=20 "$pod" -n "$NS" 2>/dev/null || echo -e "${DIM}(no logs)${NC}"
+        done <<< "$pods"
+    fi
+}
+
+cmd_restart() {
+    require_env
+
+    local deployments
+    deployments=$(run_kubectl get deployments -n "$NS" -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null)
+
+    if [ -z "$deployments" ]; then
+        print_warning "No deployments found in $NS"
+        exit 0
+    fi
+
+    local dep_array=()
+    readarray -t dep_array <<< "$deployments"
+    pick --multi "Deployments in $NS" "${dep_array[@]}"
+
+    for dep in "${PICKED[@]}"; do
+        print_status "Restarting ${BOLD}$dep${NC}..."
+        run_kubectl rollout restart "deployment/$dep" -n "$NS"
+    done
+    for dep in "${PICKED[@]}"; do
+        run_kubectl rollout status "deployment/$dep" -n "$NS"
+    done
+
+    print_status "Done"
+}
+
+cmd_services() {
+    require_env
+    print_status "Services in ${BOLD}$NS${NC}"
+    print_filtered "$(run_kubectl get services -n "$NS")" "${ARG:-}"
+}
+
+cmd_describe() {
+    require_env
+    if [ -z "$ARG" ]; then
+        local resources
+        resources=$(run_kubectl get pods,deployments,services,configmaps -n "$NS" --no-headers -o name 2>/dev/null)
+        if [ -z "$resources" ]; then
+            print_warning "No resources found in $NS"
+            exit 0
+        fi
+        local res_array=()
+        readarray -t res_array <<< "$resources"
+        pick --auto "Resources in $NS" "${res_array[@]}"
+        ARG="$PICKED"
+    fi
+    run_kubectl describe "$ARG" -n "$NS"
+}
+
+cmd_exec() {
+    require_env
+
+    local pods
+    pods=$(run_kubectl get pods -n "$NS" -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}')
+
+    if [ -z "$pods" ]; then
+        print_warning "No pods found in $NS"
+        exit 0
+    fi
+
+    local pod_array=()
+    readarray -t pod_array <<< "$pods"
+    pick "Pods in $NS" "${pod_array[@]}"
+
+    print_status "Connecting to ${BOLD}$PICKED${NC}..."
+    if [ -n "$SSH_HOST" ]; then
+        local quoted
+        quoted=$(printf '%q ' "${KUBECTL_CMD[@]}" exec -it "$PICKED" -n "$NS" -- /bin/sh)
+        ssh -t -- "$SSH_HOST" "$quoted"
+    else
+        "${KUBECTL_CMD[@]}" exec -it "$PICKED" -n "$NS" -- /bin/sh
+    fi
+}
+
+# Pick a service+port from jsonpath output. Sets SVC_NAME and SVC_PORT.
+# Usage: pick_service "title" "jsonpath output" "port label"
+pick_service() {
+    local title="$1" output="$2" port_label="$3"
+    local names=() ports=() labels=()
+
+    while IFS= read -r line; do
+        [ -z "$line" ] && continue
+        local name="${line%% *}"
+        [ -z "$name" ] && continue
+        IFS=',' read -ra _parr <<< "${line##* }"
+        for p in "${_parr[@]}"; do
+            [ -n "$p" ] && names+=("$name") && ports+=("$p") && labels+=("$name ${DIM}($port_label: $p)${NC}")
+        done
+    done <<< "$output"
+
+    [ ${#names[@]} -eq 0 ] && return 1
+
+    pick --auto "$title" "${labels[@]}"
+    SVC_NAME="${names[${PICKED_IDX[0]}]}"
+    SVC_PORT="${ports[${PICKED_IDX[0]}]}"
+}
+
+cmd_port_forward() {
+    require_env
+
+    if [ -n "$SSH_HOST" ]; then
+        print_error "port-forward is not supported over SSH sessions"
+        exit 1
+    fi
+
+    local output
+    output=$(run_kubectl get services -n "$NS" -o jsonpath='{range .items[*]}{.metadata.name}{" "}{range .spec.ports[*]}{.port}{","}{end}{"\n"}{end}' 2>/dev/null)
+
+    if ! pick_service "Services in $NS" "$output" "ports"; then
+        print_warning "No services found in $NS"
+        exit 0
+    fi
+
+    local saved_port
+    saved_port=$(load_forward "$SVC_NAME" "$SVC_PORT")
+    local default_port="${saved_port:-$SVC_PORT}"
+
+    read -rp "Local port [${default_port}]: " local_port
+    local_port="${local_port:-$default_port}"
+
+    if ! [[ "$local_port" =~ ^[0-9]+$ ]] || [ "$local_port" -lt 1 ] || [ "$local_port" -gt 65535 ]; then
+        print_error "Invalid port: $local_port (must be 1-65535)"
+        exit 1
+    fi
+
+    save_forward "$SVC_NAME" "$SVC_PORT" "$local_port"
+
+    print_status "Forwarding localhost:${local_port} → svc/${SVC_NAME}:${SVC_PORT} (Ctrl+C to stop)"
+    "${KUBECTL_CMD[@]}" port-forward -n "$NS" "svc/$SVC_NAME" "${local_port}:${SVC_PORT}"
+}
+
+cmd_namespaces() {
+    load_env
+    print_env_banner
+    run_kubectl get namespaces
+}
+
+cmd_configmaps() {
+    require_env
+
+    local cms
+    cms=$(run_kubectl get configmaps -n "$NS" -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null)
+
+    if [ -z "$cms" ]; then
+        print_warning "No configmaps found in $NS"
+        exit 0
+    fi
+
+    local cm_array=()
+    readarray -t cm_array <<< "$cms"
+
+    echo -e "${BOLD}ConfigMaps in $NS:${NC}"
+    local i=1
+    for cm in "${cm_array[@]}"; do
+        echo -e "  ${CYAN}$i)${NC} $cm"
+        i=$((i + 1))
+    done
+
+    echo ""
+    read -rp "View configmap? [1-${#cm_array[@]}, enter to skip]: " choice
+
+    if [ -n "$choice" ]; then
+        if ! [[ "$choice" =~ ^[0-9]+$ ]] || [ "$choice" -lt 1 ] || [ "$choice" -gt "${#cm_array[@]}" ]; then
+            print_error "Invalid selection"
+            exit 1
+        fi
+        echo ""
+        run_kubectl get configmap "${cm_array[$((choice-1))]}" -n "$NS" -o yaml
+    fi
+}
+
+cmd_secrets() {
+    require_env
+    print_status "Secrets in ${BOLD}$NS${NC} ${DIM}(names only)${NC}"
+    print_filtered "$(run_kubectl get secrets -n "$NS")" "${ARG:-}"
+}
+
+cmd_cronjobs() {
+    require_env
+    print_status "CronJobs in ${BOLD}$NS${NC}"
+    print_filtered "$(run_kubectl get cronjobs -n "$NS")" "${ARG:-}"
+}
+
+cmd_events() {
+    require_env
+    print_status "Recent events in ${BOLD}$NS${NC}"
+    print_filtered "$(run_kubectl get events -n "$NS" --sort-by='.lastTimestamp' | tail -30)" "${ARG:-}"
+}
+
+cmd_status() {
+    load_env
+    print_env_banner
+    echo ""
+
+    local output
+    output=$(run_kubectl get nodes,pods,deployments,services -n "$ENV_NS" --no-headers 2>/dev/null)
+
+    local node_count pod_count deploy_count svc_count
+    node_count=$(echo "$output" | grep -c "^node/" || true)
+    pod_count=$(echo "$output" | grep -c "^pod/" || true)
+    deploy_count=$(echo "$output" | grep -c "^deployment" || true)
+    svc_count=$(echo "$output" | grep -c "^service/" || true)
+
+    echo -e "${BOLD}Cluster:${NC}"
+    echo -e "  Nodes:        $node_count"
+    echo ""
+    echo -e "${BOLD}Namespace ${ENV_NS}:${NC}"
+    echo -e "  Pods:         $pod_count"
+    echo -e "  Deployments:  $deploy_count"
+    echo -e "  Services:     $svc_count"
+
+    echo ""
+    local not_ready
+    not_ready=$(echo "$output" | grep "^pod/" | grep -v "Running\|Completed" || true)
+    if [ -n "$not_ready" ]; then
+        print_warning "Pods not running:"
+        echo "$not_ready" | sed 's|^pod/||'
+    else
+        print_status "All pods running"
+    fi
+}
+
+cmd_dashboard() {
+    load_env
+
+    if [ -n "$SSH_HOST" ]; then
+        print_error "dashboard is not supported over SSH sessions"
+        exit 1
+    fi
+
+    local ns
+    ns=$(run_kubectl get namespaces -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null | { grep -i headlamp || true; })
+
+    if [ -z "$ns" ]; then
+        print_error "Headlamp namespace not found"
+        exit 1
+    fi
+
+    local nodeport
+    nodeport=$(run_kubectl get services -n "$ns" -o jsonpath='{range .items[?(@.spec.type=="NodePort")]}{range .spec.ports[*]}{.nodePort}{end}{end}' 2>/dev/null)
+
+    if [ -z "$nodeport" ]; then
+        print_error "No NodePort service found in $ns"
+        exit 1
+    fi
+
+    if [ "$NEW_TOKEN" = true ]; then
+        print_status "Generating new Headlamp token (valid 1 year)..."
+        local token
+        token=$(run_kubectl create token headlamp --namespace "$ns" --duration=8760h)
+        echo ""
+        echo "$token"
+        echo ""
+    fi
+
+    local url="http://localhost:${nodeport}"
+    print_status "Opening Headlamp at ${BOLD}${url}${NC}"
+    xdg-open "$url" 2>/dev/null || open "$url" 2>/dev/null || print_warning "Could not open browser. Visit $url manually."
+}
+
+cmd_app() {
+    require_env
+
+    if [ -n "$SSH_HOST" ]; then
+        print_error "app is not supported over SSH sessions"
+        exit 1
+    fi
+
+    local output
+    output=$(run_kubectl get services -n "$NS" -o jsonpath='{range .items[?(@.spec.type=="NodePort")]}{.metadata.name}{" "}{range .spec.ports[*]}{.nodePort}{","}{end}{"\n"}{end}' 2>/dev/null)
+
+    if ! pick_service "NodePort services in $NS" "$output" "nodePort"; then
+        print_warning "No NodePort services found in $NS"
+        exit 0
+    fi
+
+    if [ "$ENV_TOOL" = "minikube" ]; then
+        print_warning "minikube doesn't expose NodePorts on localhost — using port-forward instead"
+        cmd_port_forward
+    else
+        local url="http://localhost:${SVC_PORT}"
+        print_status "Opening ${BOLD}${url}${NC}"
+        xdg-open "$url" 2>/dev/null || open "$url" 2>/dev/null || print_warning "Could not open browser. Visit $url manually."
+    fi
+}
+
+show_help() {
+    echo -e "${BOLD}k8s${NC} — Generic Kubernetes helper"
+    echo ""
+    echo -e "${BOLD}Usage:${NC} k8s <command> [args] [-n namespace]"
+    echo ""
+    echo -e "${BOLD}Namespace:${NC}"
+    echo "  use                    Pick namespace from local microk8s/minikube + k8s contexts"
+    echo "  use-remote <host>      Pick namespace from remote microk8s/minikube via SSH"
+    echo ""
+    echo -e "${BOLD}Inspection:${NC}"
+    echo "  pods [filter]          List pods (filter by name)"
+    echo "  logs [filter] [-f]     Show last 20 log lines per pod (-f to follow)"
+    echo "  services [filter]      List services"
+    echo "  namespaces             List all namespaces"
+    echo "  events [filter]        Show recent events"
+    echo "  configmaps             List configmaps (interactive viewer)"
+    echo "  secrets [filter]       List secret names"
+    echo "  cronjobs [filter]      List cronjobs"
+    echo "  status                 Show cluster and namespace stats"
+    echo "  describe <resource>    Describe a resource (e.g. pod/my-pod)"
+    echo ""
+    echo -e "${BOLD}Actions:${NC}"
+    echo "  restart                Restart a deployment (interactive picker)"
+    echo "  exec                   Shell into a pod (interactive picker)"
+    echo "  port-forward           Forward a service port (local only)"
+    echo "  app                    Open a NodePort service in browser (local only)"
+    echo "  dashboard [-t]         Open Headlamp dashboard (-t to generate new token)"
+    echo ""
+    echo -e "${BOLD}Options:${NC}"
+    echo "  -n <namespace>         Override saved namespace"
+    echo "  -f                     Follow logs (used with 'logs')"
+    echo "  -t                     Generate new token (used with 'dashboard')"
+    echo "  -h, --help             Show this help"
+    echo ""
+    if [ -f "$ENV_FILE" ]; then
+        load_env_vars
+        print_env_banner
+    else
+        echo -e "${DIM}No active environment set. Run: k8s use${NC}"
+    fi
+}
+
+# --- Dispatch ---
+
+case "$CMD" in
+    ""|"-h"|"--help") show_help ;;
+    use)              cmd_use ;;
+    use-remote)       cmd_use_remote ;;
+    pods)             cmd_pods ;;
+    logs)             cmd_logs ;;
+    restart)          cmd_restart ;;
+    namespaces|ns)    cmd_namespaces ;;
+    services|svc)     cmd_services ;;
+    describe|desc)    cmd_describe ;;
+    exec|sh)          cmd_exec ;;
+    configmaps|cm)    cmd_configmaps ;;
+    secrets)          cmd_secrets ;;
+    cronjobs|cj)      cmd_cronjobs ;;
+    port-forward|pf)  cmd_port_forward ;;
+    app)              cmd_app ;;
+    dashboard)        cmd_dashboard ;;
+    events)           cmd_events ;;
+    status|st)        cmd_status ;;
+    *)
+        print_error "Unknown command: $CMD"
+        echo ""
+        show_help
+        exit 1
+        ;;
+esac
