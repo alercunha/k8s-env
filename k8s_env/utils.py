@@ -38,7 +38,6 @@ class AppContext:
     env: Env | None = None
     kubectl: KubeCtl | None = None
     ns_override: str = ''
-    global_mode: bool = False
     follow: bool = False
     env_path: str = ENV_FILE
 

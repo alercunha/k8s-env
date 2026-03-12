@@ -1,19 +1,17 @@
 from __future__ import annotations
 import os
+import shutil
 import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from k8s_env import k8s
 from k8s_env.utils import AppContext, ENV_FILE, is_available, validate
 
 DISCOVERY_TIMEOUT = 10
 
-GLOBAL_DIR = os.path.join(
-    os.environ.get('XDG_CONFIG_HOME', os.path.expanduser('~/.config')), 'k8s-env',
-)
-PROFILES_DIR = os.path.join(GLOBAL_DIR, 'profiles')
-ACTIVE_LINK = os.path.join(GLOBAL_DIR, 'active')
+PROFILES_DIR = os.path.join(ENV_FILE, 'profiles')
+ACTIVE_LINK = os.path.join(ENV_FILE, 'active')
 
 
 @dataclass
@@ -22,34 +20,41 @@ class Env:
     ssh_host: str = ''
     context: str = ''
     namespace: str = ''
+    port_forwards: dict[str, str] = field(default_factory=dict)
 
 
 def _parse_env_file(path: str) -> Env:
-    # Parse key=value pairs, skip port-forward lines (pf.*)
+    # Parse key=value pairs; pf.* lines become port_forwards
     fields: dict[str, str] = {}
+    port_forwards: dict[str, str] = {}
     with open(path) as f:
         for line in f:
             line = line.strip()
-            if '=' in line and not line.startswith('pf.'):
-                key, _, val = line.partition('=')
+            if not line or '=' not in line:
+                continue
+            key, _, val = line.partition('=')
+            if key.startswith('pf.'):
+                port_forwards[key] = val
+            else:
                 fields[key] = val
     return Env(
         tool=fields.get('tool', ''),
         ssh_host=fields.get('ssh_host', ''),
         context=fields.get('context', ''),
         namespace=fields.get('namespace', ''),
+        port_forwards=port_forwards,
     )
 
 
 def resolve_env(ctx: AppContext) -> None:
-    # Local file wins unless -g forces global mode
-    if not ctx.global_mode and os.path.isfile(ENV_FILE):
+    if os.path.isfile(ENV_FILE):
         ctx.env_path = ENV_FILE
         return
-    # Fall through to global active profile
-    if os.path.islink(ACTIVE_LINK):
-        ctx.env_path = os.path.realpath(ACTIVE_LINK)
-        return
+    if os.path.isdir(ENV_FILE):
+        if os.path.islink(ACTIVE_LINK):
+            ctx.env_path = os.path.realpath(ACTIVE_LINK)
+            return
+        raise SystemExit('No active profile. Run: k8s-env profile activate')
     raise SystemExit('No environment set. Run: k8s-env use')
 
 
@@ -57,6 +62,18 @@ def resolve_env(ctx: AppContext) -> None:
 class Profile:
     name: str
     env: Env
+
+
+def _profile_name(env: Env) -> str:
+    location = env.ssh_host or env.context or 'local'
+    return f'{env.tool}-{location}-{env.namespace}'
+
+
+def active_profile_name() -> str:
+    if not os.path.islink(ACTIVE_LINK):
+        return ''
+    target = os.path.basename(os.readlink(ACTIVE_LINK))
+    return target.removesuffix('.env')
 
 
 def list_profiles() -> list[Profile]:
@@ -73,47 +90,71 @@ def list_profiles() -> list[Profile]:
     return profiles
 
 
-def save_global(env: Env, name: str) -> None:
-    validate('profile', name)
-    os.makedirs(PROFILES_DIR, exist_ok=True)
-
-    # Write profile file with restricted permissions
-    path = os.path.join(PROFILES_DIR, f'{name}.env')
+def _write_env(path: str, env: Env) -> None:
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, 'w') as f:
         f.write(f'tool={env.tool}\n')
         f.write(f'ssh_host={env.ssh_host}\n')
         f.write(f'context={env.context}\n')
         f.write(f'namespace={env.namespace}\n')
+        for key, val in env.port_forwards.items():
+            f.write(f'{key}={val}\n')
 
-    # Atomically update active symlink
+
+def _write_profile(name: str, env: Env) -> str:
+    os.makedirs(PROFILES_DIR, exist_ok=True)
+    path = os.path.join(PROFILES_DIR, f'{name}.env')
+    _write_env(path, env)
+    return path
+
+
+def _set_active(path: str) -> None:
+    # Symlink target must be relative to the .k8s-env directory
+    rel = os.path.relpath(path, ENV_FILE)
     tmp = ACTIVE_LINK + '.tmp'
-    os.symlink(path, tmp)
+    os.symlink(rel, tmp)
     os.replace(tmp, ACTIVE_LINK)
 
 
-def activate_profile(name: str) -> None:
+def profile_init(ctx: AppContext) -> str:
+    # Initialize multi-profile structure from single .k8s-env file
+    if os.path.isdir(ENV_FILE):
+        raise SystemExit('Already in multi-profile mode. Use: k8s-env use')
+    if not os.path.isfile(ENV_FILE):
+        raise SystemExit('No environment set. Run: k8s-env use')
+    env = load_env(ctx)
+    name = _profile_name(env)
+    os.remove(ENV_FILE)
+    _set_active(_write_profile(name, env))
+    return name
+
+
+def profile_activate(name: str) -> None:
     path = os.path.join(PROFILES_DIR, f'{name}.env')
     if not os.path.isfile(path):
         raise SystemExit(f'Profile not found: {name}')
-    tmp = ACTIVE_LINK + '.tmp'
-    os.symlink(path, tmp)
-    os.replace(tmp, ACTIVE_LINK)
+    _set_active(path)
 
 
-def active_profile_name() -> str:
-    if not os.path.islink(ACTIVE_LINK):
-        return ''
-    target = os.path.basename(os.readlink(ACTIVE_LINK))
-    return target.removesuffix('.env')
+def profile_delete(name: str) -> None:
+    path = os.path.join(PROFILES_DIR, f'{name}.env')
+    if not os.path.isfile(path):
+        raise SystemExit(f'Profile not found: {name}')
+    # If deleting the active profile, remove the symlink
+    if os.path.islink(ACTIVE_LINK) and os.path.realpath(ACTIVE_LINK) == os.path.realpath(path):
+        os.remove(ACTIVE_LINK)
+    os.remove(path)
+    # If no profiles left, remove the directory structure
+    remaining = [f for f in os.listdir(PROFILES_DIR) if f.endswith('.env')]
+    if not remaining:
+        shutil.rmtree(ENV_FILE)
 
 
 def load_env(ctx: AppContext) -> Env:
     if ctx.env:
         return ctx.env
 
-    # Resolve env_path if still at the default
-    if ctx.env_path == ENV_FILE and (ctx.global_mode or not os.path.isfile(ENV_FILE)):
+    if ctx.env_path == ENV_FILE:
         resolve_env(ctx)
 
     path = ctx.env_path
@@ -136,26 +177,20 @@ def load_env(ctx: AppContext) -> Env:
 
 
 def save_env(env: Env, ctx: AppContext) -> None:
+    # In multi-profile mode, create a new profile and activate it
+    if ctx.env_path == ENV_FILE and os.path.isdir(ENV_FILE):
+        name = _profile_name(env)
+        path = _write_profile(name, env)
+        _set_active(path)
+        ctx.env_path = path
+        ctx.env = env
+        return
+
     path = ctx.env_path
     if os.path.islink(path):
         raise SystemExit(f'{path} is a symlink — refusing to write')
 
-    # Preserve port-forward mappings from previous env file
-    pf_lines: list[str] = []
-    if os.path.isfile(path):
-        with open(path) as f:
-            pf_lines = [line.rstrip('\n') for line in f if line.startswith('pf.')]
-
-    # Write with restricted permissions (owner-only)
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, 'w') as f:
-        f.write(f'tool={env.tool}\n')
-        f.write(f'ssh_host={env.ssh_host}\n')
-        f.write(f'context={env.context}\n')
-        f.write(f'namespace={env.namespace}\n')
-        for line in pf_lines:
-            f.write(f'{line}\n')
-
+    _write_env(path, env)
     ctx.env = env
 
 
@@ -176,7 +211,7 @@ class NamespaceEntry:
     tool: str
     context: str
     namespace: str
-    group: str  # display group label
+    group: str
 
 
 def _probe_namespaces(kubectl: k8s.KubeCtl, location: str) -> list[NamespaceEntry]:
