@@ -1,12 +1,6 @@
 from __future__ import annotations
 import re
 import shutil
-from dataclasses import dataclass
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from k8s_env.k8s import KubeCtl
-    from k8s_env.service import Env
 
 ENV_FILE = '.k8s-env'
 
@@ -31,20 +25,3 @@ def validate(field_name: str, value: str) -> None:
 
 def is_available(binary: str) -> bool:
     return shutil.which(binary) is not None
-
-
-@dataclass
-class AppContext:
-    env: Env | None = None
-    kubectl: KubeCtl | None = None
-    ns_override: str = ''
-    follow: bool = False
-    env_path: str = ENV_FILE
-
-    @property
-    def namespace(self) -> str:
-        if self.ns_override:
-            return self.ns_override
-        if self.env and self.env.namespace:
-            return self.env.namespace
-        raise SystemExit('No namespace set. Run: k8s-env use')

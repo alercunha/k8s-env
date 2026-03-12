@@ -1,9 +1,10 @@
 from __future__ import annotations
-import os
 import sys
 
-from k8s_env import service
-from k8s_env.utils import AppContext, ENV_FILE
+from k8s_env import profile, service
+from k8s_env.profile import Profile
+from k8s_env.service import Env
+from k8s_env.context import AppContext
 
 # -- Colors -------------------------------------------------------------------
 
@@ -29,8 +30,6 @@ def print_error(msg: str) -> None:
 
 
 def print_banner(ctx: AppContext) -> None:
-    if not ctx.kubectl:
-        return
     k = ctx.kubectl
     name = k.tool_name
     ns = ctx.namespace
@@ -117,8 +116,8 @@ def cmd_use(ctx: AppContext) -> None:
     groups = [e.group for e in entries]
     selected = entries[pick('Available namespaces', labels, groups=groups)[0][0]]
 
-    env = service.Env(tool=selected.tool, context=selected.context, namespace=selected.namespace)
-    service.save_env(env, ctx)
+    env = Env(tool=selected.tool, context=selected.context, namespace=selected.namespace)
+    profile.save_env(env, ctx)
     print()
     print_status(f'Set to {_BOLD}{selected.group}{_NC} namespace: {_BOLD}{selected.namespace}{_NC}')
 
@@ -137,18 +136,17 @@ def cmd_use_remote(ctx: AppContext, host: str) -> None:
     groups = [e.tool for e in entries]
     selected = entries[pick(f'Namespaces on {host}', labels, groups=groups)[0][0]]
 
-    env = service.Env(tool=selected.tool, ssh_host=host, namespace=selected.namespace)
-    service.save_env(env, ctx)
+    env = Env(tool=selected.tool, ssh_host=host, namespace=selected.namespace)
+    profile.save_env(env, ctx)
     print()
     print_status(f'Set to {_YELLOW}{selected.tool} ssh{_NC} host: {_BOLD}{host}{_NC} namespace: {_BOLD}{selected.namespace}{_NC}')
 
 
 def cmd_ctx(ctx: AppContext) -> None:
     # Instant one-liner showing active environment source and target
-    service.load_env(ctx)
     env = ctx.env
-    profile = service.active_profile_name()
-    source = profile if profile else 'local'
+    active = profile.active_profile_name()
+    source = active if active else 'local'
     parts = [env.tool]
     if env.ssh_host:
         parts.append(f'on {env.ssh_host}')
@@ -159,7 +157,7 @@ def cmd_ctx(ctx: AppContext) -> None:
     print(f'{_CYAN}[{source}]{_NC} {" ".join(parts)} / {_BOLD}{env.namespace}{_NC}')
 
 
-def _profile_label(p: service.Profile, active: str) -> str:
+def _profile_label(p: Profile, active: str) -> str:
     # Format: "name — tool on location / namespace"
     env = p.env
     location = env.ssh_host or env.context or 'local'
@@ -168,41 +166,41 @@ def _profile_label(p: service.Profile, active: str) -> str:
 
 
 def _profile_list() -> None:
-    profiles = service.list_profiles()
+    profiles = profile.list_profiles()
     if not profiles:
         print(f'{_DIM}No profiles saved. Run: k8s-env profile init{_NC}')
         return
-    active = service.active_profile_name()
+    active = profile.active_profile_name()
     print(f'{_BOLD}Profiles:{_NC}')
     for p in profiles:
         print(f'  {_profile_label(p, active)}')
 
 
 def _profile_init(ctx: AppContext) -> None:
-    name = service.profile_init(ctx)
+    name = profile.init_profiles(ctx)
     print_status(f'Initialized profiles with {_BOLD}{name}{_NC}')
 
 
 def _profile_activate() -> None:
-    profiles = service.list_profiles()
+    profiles = profile.list_profiles()
     if not profiles:
         raise SystemExit('No profiles saved. Run: k8s-env profile init')
-    active = service.active_profile_name()
+    active = profile.active_profile_name()
     items = [_profile_label(p, active) for p in profiles]
     selected = profiles[pick('Activate profile', items)[0][0]]
-    service.profile_activate(selected.name)
+    selected.activate()
     print()
     print_status(f'Activated profile {_BOLD}{selected.name}{_NC}')
 
 
 def _profile_delete() -> None:
-    profiles = service.list_profiles()
+    profiles = profile.list_profiles()
     if not profiles:
         raise SystemExit('No profiles saved')
-    active = service.active_profile_name()
+    active = profile.active_profile_name()
     items = [_profile_label(p, active) for p in profiles]
     selected = profiles[pick('Delete profile', items)[0][0]]
-    service.profile_delete(selected.name)
+    selected.delete()
     print()
     print_status(f'Deleted profile {_BOLD}{selected.name}{_NC}')
 
@@ -224,13 +222,11 @@ def cmd_profile(ctx: AppContext, sub: str) -> None:
 
 
 def cmd_namespaces(ctx: AppContext) -> None:
-    service.require_env(ctx)
     print_banner(ctx)
     print(ctx.kubectl.get_namespaces_all(), end='')
 
 
 def cmd_pods(ctx: AppContext, filter_text: str) -> None:
-    service.require_env(ctx)
     print_banner(ctx)
     ns = ctx.namespace
     print_status(f'Pods in {_BOLD}{ns}{_NC}')
@@ -238,7 +234,6 @@ def cmd_pods(ctx: AppContext, filter_text: str) -> None:
 
 
 def cmd_services(ctx: AppContext, filter_text: str) -> None:
-    service.require_env(ctx)
     print_banner(ctx)
     ns = ctx.namespace
     print_status(f'Services in {_BOLD}{ns}{_NC}')
@@ -246,7 +241,6 @@ def cmd_services(ctx: AppContext, filter_text: str) -> None:
 
 
 def cmd_secrets(ctx: AppContext, filter_text: str) -> None:
-    service.require_env(ctx)
     print_banner(ctx)
     ns = ctx.namespace
     print_status(f'Secrets in {_BOLD}{ns}{_NC} {_DIM}(names only){_NC}')
@@ -254,7 +248,6 @@ def cmd_secrets(ctx: AppContext, filter_text: str) -> None:
 
 
 def cmd_cronjobs(ctx: AppContext, filter_text: str) -> None:
-    service.require_env(ctx)
     print_banner(ctx)
     ns = ctx.namespace
     print_status(f'CronJobs in {_BOLD}{ns}{_NC}')
@@ -262,7 +255,6 @@ def cmd_cronjobs(ctx: AppContext, filter_text: str) -> None:
 
 
 def cmd_events(ctx: AppContext, filter_text: str) -> None:
-    service.require_env(ctx)
     print_banner(ctx)
     ns = ctx.namespace
     print_status(f'Recent events in {_BOLD}{ns}{_NC}')
@@ -274,7 +266,6 @@ def cmd_events(ctx: AppContext, filter_text: str) -> None:
 
 
 def cmd_logs(ctx: AppContext, filter_text: str) -> None:
-    service.require_env(ctx)
     print_banner(ctx)
     ns = ctx.namespace
     k = ctx.kubectl
@@ -304,7 +295,6 @@ def cmd_logs(ctx: AppContext, filter_text: str) -> None:
 
 
 def cmd_configmaps(ctx: AppContext) -> None:
-    service.require_env(ctx)
     print_banner(ctx)
     ns = ctx.namespace
 
@@ -327,7 +317,6 @@ def cmd_configmaps(ctx: AppContext) -> None:
 
 
 def cmd_describe(ctx: AppContext, arg: str) -> None:
-    service.require_env(ctx)
     print_banner(ctx)
     ns = ctx.namespace
 
@@ -341,7 +330,6 @@ def cmd_describe(ctx: AppContext, arg: str) -> None:
 
 
 def cmd_status(ctx: AppContext) -> None:
-    service.require_env(ctx)
     print_banner(ctx)
     ns = ctx.namespace
     print()
@@ -412,12 +400,8 @@ def show_help(ctx: AppContext) -> None:
     print()
     # Show active environment if one is saved
     try:
-        service.load_env(ctx)
-    except SystemExit:
-        pass
-    if ctx.env:
         print_banner(ctx)
-    else:
+    except SystemExit:
         print(f'{_DIM}No active environment set. Run: k8s-env use{_NC}')
 
 
