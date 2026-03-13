@@ -316,6 +316,24 @@ def cmd_configmaps(ctx: AppContext) -> None:
     print(ctx.kubectl.get_configmap_yaml(cms[int(raw) - 1], ns), end='')
 
 
+def cmd_exec(ctx: AppContext, filter_text: str) -> None:
+    print_banner(ctx)
+    ns = ctx.namespace
+    k = ctx.kubectl
+
+    pods = k.list_pods(ns)
+    if filter_text:
+        lower = filter_text.lower()
+        pods = [p for p in pods if lower in p.lower()]
+    if not pods:
+        print_warning(f'No pods found in {ns}')
+        return
+
+    selected = pick(f'Pods in {ns}', pods, auto=True)[0][1]
+    print_status(f'Connecting to {_BOLD}{selected}{_NC}...')
+    k.exec_shell(selected, ns)
+
+
 def cmd_describe(ctx: AppContext, arg: str) -> None:
     print_banner(ctx)
     ns = ctx.namespace
@@ -391,6 +409,7 @@ def show_help(ctx: AppContext) -> None:
     print('  secrets [filter]       List secret names')
     print('  cronjobs [filter]      List cronjobs')
     print('  status                 Show cluster and namespace stats')
+    print('  exec [filter]          Open a shell in a pod (pick from list)')
     print('  describe [resource]    Describe a resource (picker if omitted)')
     print()
     print(f'{_BOLD}Options:{_NC}')
@@ -424,6 +443,8 @@ _COMMANDS = {
     'events':     lambda ctx, arg: cmd_events(ctx, arg),
     'configmaps': lambda ctx, _arg: cmd_configmaps(ctx),
     'cm':         lambda ctx, _arg: cmd_configmaps(ctx),
+    'exec':       lambda ctx, arg: cmd_exec(ctx, arg),
+    'sh':         lambda ctx, arg: cmd_exec(ctx, arg),
     'describe':   lambda ctx, arg: cmd_describe(ctx, arg),
     'desc':       lambda ctx, arg: cmd_describe(ctx, arg),
     'status':     lambda ctx, _arg: cmd_status(ctx),

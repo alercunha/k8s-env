@@ -1,4 +1,5 @@
 from __future__ import annotations
+import os
 import shlex
 import subprocess
 from abc import ABC, abstractmethod
@@ -95,6 +96,15 @@ class KubeCtl(ABC):
 
     def follow_logs(self, pod: str, namespace: str, tail: int = 50) -> None:
         self.stream('logs', '-f', f'--tail={tail}', pod, '-n', namespace)
+
+    def exec_shell(self, pod: str, namespace: str) -> None:
+        # Interactive shell into a pod — needs TTY
+        self.stream_tty('exec', '-it', pod, '-n', namespace, '--', '/bin/sh')
+
+    def stream_tty(self, *args: str) -> None:
+        # Replace process entirely so kubectl gets direct terminal control
+        cmd = self._base_cmd() + list(args)
+        os.execvp(cmd[0], cmd)
 
     def list_configmaps(self, namespace: str, timeout: int | None = None) -> list[str]:
         out = self.run(
@@ -202,6 +212,11 @@ class SshKubeCtl(KubeCtl):
     def stream(self, *args: str) -> None:
         remote_cmd = shlex.join(self._base_cmd() + list(args))
         subprocess.run(['ssh', '-n', '--', self._host, remote_cmd])
+
+    def stream_tty(self, *args: str) -> None:
+        # Replace process with ssh -t for TTY allocation
+        remote_cmd = shlex.join(self._base_cmd() + list(args))
+        os.execvp('ssh', ['ssh', '-t', '--', self._host, remote_cmd])
 
 
 # -- Factory -----------------------------------------------------------------
