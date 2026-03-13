@@ -134,6 +134,64 @@ class KubeCtl(ABC):
             '--no-headers', timeout=timeout,
         )
 
+    def list_deployments(self, namespace: str, timeout: int | None = None) -> list[str]:
+        out = self.run(
+            'get', 'deployments', '-n', namespace, '-o',
+            'jsonpath={range .items[*]}{.metadata.name}{"\\n"}{end}',
+            timeout=timeout,
+        )
+        return [d for d in out.strip().splitlines() if d]
+
+    def rollout_restart(self, deployment: str, namespace: str) -> str:
+        return self.run('rollout', 'restart', f'deployment/{deployment}', '-n', namespace)
+
+    def rollout_status(self, deployment: str, namespace: str) -> None:
+        self.stream('rollout', 'status', f'deployment/{deployment}', '-n', namespace)
+
+    def _list_name_port_pairs(self, jsonpath: str, namespace: str, timeout: int | None = None) -> list[tuple[str, str]]:
+        # Parse "name port1,port2,\n" jsonpath output into (name, port) pairs
+        out = self.run('get', 'services', '-n', namespace, '-o', jsonpath, timeout=timeout)
+        pairs: list[tuple[str, str]] = []
+        for line in out.strip().splitlines():
+            if not line.strip():
+                continue
+            name, _, ports_csv = line.partition(' ')
+            for port in ports_csv.split(','):
+                if port.strip():
+                    pairs.append((name, port.strip()))
+        return pairs
+
+    def list_services_with_ports(self, namespace: str, timeout: int | None = None) -> list[tuple[str, str]]:
+        return self._list_name_port_pairs(
+            'jsonpath={range .items[*]}{.metadata.name}{" "}{range .spec.ports[*]}{.port}{","}{end}{"\\n"}{end}',
+            namespace, timeout=timeout,
+        )
+
+    def list_nodeport_services(self, namespace: str, timeout: int | None = None) -> list[tuple[str, str]]:
+        return self._list_name_port_pairs(
+            'jsonpath={range .items[?(@.spec.type=="NodePort")]}'
+            '{.metadata.name}{" "}{range .spec.ports[*]}{.nodePort}{","}{end}{"\\n"}{end}',
+            namespace, timeout=timeout,
+        )
+
+    def port_forward(self, svc: str, namespace: str, local_port: str, remote_port: str) -> None:
+        self.stream('port-forward', '-n', namespace, f'svc/{svc}', f'{local_port}:{remote_port}')
+
+    def find_namespace(self, pattern: str, timeout: int | None = None) -> str:
+        out = self.run(
+            'get', 'namespaces', '-o',
+            'jsonpath={range .items[*]}{.metadata.name}{"\\n"}{end}',
+            timeout=timeout,
+        )
+        lower = pattern.lower()
+        for ns in out.strip().splitlines():
+            if lower in ns.lower():
+                return ns
+        return ''
+
+    def create_token(self, service_account: str, namespace: str, duration: str = '8760h') -> str:
+        return self.run('create', 'token', service_account, '--namespace', namespace, f'--duration={duration}').strip()
+
 
 class MicroK8s(KubeCtl):
     def _base_cmd(self) -> list[str]:

@@ -7,9 +7,10 @@ from k8s_env.utils import ENV_FILE
 
 
 class AppContext:
-    def __init__(self, ns_override: str = '', follow: bool = False) -> None:
+    def __init__(self, ns_override: str = '', follow: bool = False, new_token: bool = False) -> None:
         self.ns_override = ns_override
         self.follow = follow
+        self.new_token = new_token
         self._env: Env | None = None
         self._env_path: str | None = None
         self._kubectl: k8s.KubeCtl | None = None

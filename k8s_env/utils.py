@@ -1,6 +1,7 @@
 from __future__ import annotations
 import re
 import shutil
+import subprocess
 
 ENV_FILE = '.k8s-env'
 
@@ -25,3 +26,11 @@ def validate(field_name: str, value: str) -> None:
 
 def is_available(binary: str) -> bool:
     return shutil.which(binary) is not None
+
+
+def open_url(url: str) -> None:
+    for cmd in ('xdg-open', 'open'):
+        if shutil.which(cmd):
+            subprocess.Popen([cmd, url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return
+    print(f'\033[1;33m[WARN]\033[0m Could not open browser. Visit {url} manually.')
