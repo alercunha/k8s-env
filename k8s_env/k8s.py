@@ -177,15 +177,14 @@ class KubeCtl(ABC):
     def port_forward(self, svc: str, namespace: str, local_port: str, remote_port: str) -> None:
         self.stream('port-forward', '-n', namespace, f'svc/{svc}', f'{local_port}:{remote_port}')
 
-    def find_namespace(self, pattern: str, timeout: int | None = None) -> str:
+    def find_namespace_exact(self, name: str, timeout: int | None = None) -> str:
         out = self.run(
             'get', 'namespaces', '-o',
             'jsonpath={range .items[*]}{.metadata.name}{"\\n"}{end}',
             timeout=timeout,
         )
-        lower = pattern.lower()
         for ns in out.strip().splitlines():
-            if lower in ns.lower():
+            if ns == name:
                 return ns
         return ''
 
@@ -230,7 +229,12 @@ class K8sContext(KubeCtl):
 class SshKubeCtl(KubeCtl):
     """Decorator that routes any KubeCtl through SSH."""
 
-    _SSH_OPTS = ['-o', 'ForwardAgent=no', '-o', 'ForwardX11=no']
+    _SSH_OPTS = [
+        '-o', 'ForwardAgent=no',
+        '-o', 'ForwardX11=no',
+        '-o', 'BatchMode=yes',
+        '-o', 'PermitLocalCommand=no',
+    ]
 
     def __init__(self, inner: KubeCtl, host: str):
         self._inner = inner

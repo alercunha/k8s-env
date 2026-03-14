@@ -461,7 +461,7 @@ def cmd_dashboard(ctx: AppContext) -> None:
         raise SystemExit('dashboard is not supported over SSH sessions')
 
     k = ctx.kubectl
-    ns = k.find_namespace('headlamp')
+    ns = k.find_namespace_exact('headlamp')
     if not ns:
         raise SystemExit('Headlamp namespace not found')
 

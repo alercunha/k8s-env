@@ -3,10 +3,13 @@ from __future__ import annotations
 from k8s_env import k8s
 from k8s_env.profile import Profiles
 from k8s_env.trust import check_trusted
+from k8s_env.utils import validate
 
 
 class AppContext:
     def __init__(self, ns_override: str = '', follow: bool = False, new_token: bool = False) -> None:
+        if ns_override:
+            validate('namespace', ns_override)
         self.ns_override = ns_override
         self.follow = follow
         self.new_token = new_token

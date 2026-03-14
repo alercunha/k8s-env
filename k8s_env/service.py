@@ -1,6 +1,7 @@
 from __future__ import annotations
 import hashlib
 import os
+import stat
 import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -26,6 +27,9 @@ class Env:
 
     @classmethod
     def load(cls, path: str) -> Env:
+        mode = os.lstat(path).st_mode
+        if not stat.S_ISREG(mode):
+            raise SystemExit(f'Refusing to load {path}: not a regular file')
         with open(path, 'rb') as f:
             raw = f.read()
         content_hash = hashlib.sha256(raw).hexdigest()
@@ -60,6 +64,9 @@ class Env:
             validate('context', self.context)
         if self.ssh_host:
             validate('host', self.ssh_host)
+        for key, val in self.port_forwards.items():
+            if not val.isdigit() or not (1 <= int(val) <= 65535):
+                raise ValueError(f"Invalid port forward value for {key}: '{val}'")
 
     def save(self, path: str) -> None:
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
