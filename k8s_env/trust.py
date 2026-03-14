@@ -1,0 +1,43 @@
+from __future__ import annotations
+import hashlib
+import os
+
+TRUST_DIR = os.path.join(os.path.expanduser('~'), '.config', 'k8s-env', 'allowed')
+
+
+def _path_hash(env_path: str) -> str:
+    return hashlib.sha256(os.path.abspath(env_path).encode()).hexdigest()
+
+
+def _content_hash(file_path: str) -> str:
+    path = os.path.abspath(file_path)
+    if not os.path.isfile(path):
+        return ''
+    with open(path, 'rb') as f:
+        return hashlib.sha256(f.read()).hexdigest()
+
+
+def check_trusted(env_path: str) -> None:
+    path = os.path.abspath(env_path)
+    if not os.path.exists(path):
+        return
+    marker = os.path.join(TRUST_DIR, _path_hash(env_path))
+    if not os.path.isfile(marker):
+        raise SystemExit('.k8s-env is not trusted. Run: k8s-env allow')
+    with open(marker) as f:
+        stored = f.read().strip()
+    if stored != _content_hash(env_path):
+        raise SystemExit('.k8s-env has changed since last allowed. Run: k8s-env allow')
+
+
+def trust(env_path: str) -> None:
+    os.makedirs(TRUST_DIR, exist_ok=True)
+    marker = os.path.join(TRUST_DIR, _path_hash(env_path))
+    with open(marker, 'w') as f:
+        f.write(_content_hash(env_path))
+
+
+def untrust(env_path: str) -> None:
+    marker = os.path.join(TRUST_DIR, _path_hash(env_path))
+    if os.path.isfile(marker):
+        os.remove(marker)

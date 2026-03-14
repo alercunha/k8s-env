@@ -1,11 +1,13 @@
 from __future__ import annotations
+import shutil
+import subprocess
 import sys
 
-from k8s_env import profile, service
-from k8s_env.profile import Profile
+from k8s_env import service
+from k8s_env.profile import EnvEntry, Profiles
 from k8s_env.service import Env
 from k8s_env.context import AppContext
-from k8s_env.utils import open_url
+from k8s_env.trust import trust, untrust
 
 # -- Colors -------------------------------------------------------------------
 
@@ -28,6 +30,14 @@ def print_warning(msg: str) -> None:
 
 def print_error(msg: str) -> None:
     print(f'{_RED}[ERROR]{_NC} {msg}', file=sys.stderr)
+
+
+def open_url(url: str) -> None:
+    for cmd in ('xdg-open', 'open'):
+        if shutil.which(cmd):
+            subprocess.Popen([cmd, url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return
+    print_warning(f'Could not open browser. Visit {url} manually.')
 
 
 def print_banner(ctx: AppContext) -> None:
@@ -118,7 +128,8 @@ def cmd_use(ctx: AppContext) -> None:
     selected = entries[pick('Available namespaces', labels, groups=groups)[0][0]]
 
     env = Env(tool=selected.tool, context=selected.context, namespace=selected.namespace)
-    profile.save_env(env, ctx)
+    entry = ctx.profiles.save(env)
+    trust(entry.path)
     print()
     print_status(f'Set to {_BOLD}{selected.group}{_NC} namespace: {_BOLD}{selected.namespace}{_NC}')
 
@@ -138,7 +149,8 @@ def cmd_use_remote(ctx: AppContext, host: str) -> None:
     selected = entries[pick(f'Namespaces on {host}', labels, groups=groups)[0][0]]
 
     env = Env(tool=selected.tool, ssh_host=host, namespace=selected.namespace)
-    profile.save_env(env, ctx)
+    entry = ctx.profiles.save(env)
+    trust(entry.path)
     print()
     print_status(f'Set to {_YELLOW}{selected.tool} ssh{_NC} host: {_BOLD}{host}{_NC} namespace: {_BOLD}{selected.namespace}{_NC}')
 
@@ -146,7 +158,7 @@ def cmd_use_remote(ctx: AppContext, host: str) -> None:
 def cmd_ctx(ctx: AppContext) -> None:
     # Instant one-liner showing active environment source and target
     env = ctx.env
-    active = profile.active_profile_name()
+    active = ctx.profiles.active_name
     source = active if active else 'local'
     parts = [env.tool]
     if env.ssh_host:
@@ -158,60 +170,72 @@ def cmd_ctx(ctx: AppContext) -> None:
     print(f'{_CYAN}[{source}]{_NC} {" ".join(parts)} / {_BOLD}{env.namespace}{_NC}')
 
 
-def _profile_label(p: Profile, active: str) -> str:
+def cmd_allow(ctx: AppContext) -> None:
+    trust(ctx.profiles.active.path)
+    print_status('Trusted .k8s-env in current directory')
+
+
+def cmd_deny(ctx: AppContext) -> None:
+    untrust(ctx.profiles.active.path)
+    print_status('Removed trust for .k8s-env in current directory')
+
+
+def _entry_label(e: EnvEntry, active: str) -> str:
     # Format: "name — tool on location / namespace"
-    env = p.env
+    env = e.env
     location = env.ssh_host or env.context or 'local'
-    marker = f' {_GREEN}(active){_NC}' if p.name == active else ''
-    return f'{p.name} {_DIM}— {env.tool} on {location} / {env.namespace}{_NC}{marker}'
+    marker = f' {_GREEN}(active){_NC}' if e.name == active else ''
+    return f'{e.name} {_DIM}— {env.tool} on {location} / {env.namespace}{_NC}{marker}'
 
 
-def _profile_list() -> None:
-    profiles = profile.list_profiles()
-    if not profiles:
+def _profile_list(ctx: AppContext) -> None:
+    entries = ctx.profiles.list()
+    if not entries:
         print(f'{_DIM}No profiles saved. Run: k8s-env profile init{_NC}')
         return
-    active = profile.active_profile_name()
+    active = ctx.profiles.active_name
     print(f'{_BOLD}Profiles:{_NC}')
-    for p in profiles:
-        print(f'  {_profile_label(p, active)}')
+    for e in entries:
+        print(f'  {_entry_label(e, active)}')
 
 
 def _profile_init(ctx: AppContext) -> None:
-    name = profile.init_profiles(ctx)
-    print_status(f'Initialized profiles with {_BOLD}{name}{_NC}')
+    entry = ctx.profiles.init_multi()
+    trust(entry.path)
+    print_status(f'Initialized profiles with {_BOLD}{entry.name}{_NC}')
 
 
-def _profile_activate() -> None:
-    profiles = profile.list_profiles()
-    if not profiles:
+def _profile_activate(ctx: AppContext) -> None:
+    entries = ctx.profiles.list()
+    if not entries:
         raise SystemExit('No profiles saved. Run: k8s-env profile init')
-    active = profile.active_profile_name()
-    items = [_profile_label(p, active) for p in profiles]
-    selected = profiles[pick('Activate profile', items)[0][0]]
-    selected.activate()
+    active = ctx.profiles.active_name
+    items = [_entry_label(e, active) for e in entries]
+    selected = entries[pick('Activate profile', items)[0][0]]
+    ctx.profiles.activate(selected.name)
+    trust(ctx.profiles.active.path)
     print()
     print_status(f'Activated profile {_BOLD}{selected.name}{_NC}')
 
 
-def _profile_delete() -> None:
-    profiles = profile.list_profiles()
-    if not profiles:
+def _profile_delete(ctx: AppContext) -> None:
+    entries = ctx.profiles.list()
+    if not entries:
         raise SystemExit('No profiles saved')
-    active = profile.active_profile_name()
-    items = [_profile_label(p, active) for p in profiles]
-    selected = profiles[pick('Delete profile', items)[0][0]]
-    selected.delete()
+    active = ctx.profiles.active_name
+    items = [_entry_label(e, active) for e in entries]
+    selected = entries[pick('Delete profile', items)[0][0]]
+    ctx.profiles.delete(selected.name)
     print()
     print_status(f'Deleted profile {_BOLD}{selected.name}{_NC}')
 
 
 _PROFILE_COMMANDS = {
-    '':         lambda ctx: _profile_list(),
-    'list':     lambda ctx: _profile_list(),
+    '':         lambda ctx: _profile_list(ctx),
+    'list':     lambda ctx: _profile_list(ctx),
     'init':     lambda ctx: _profile_init(ctx),
-    'activate': lambda ctx: _profile_activate(),
-    'delete':   lambda ctx: _profile_delete(),
+    'activate': lambda ctx: _profile_activate(ctx),
+    'delete':   lambda ctx: _profile_delete(ctx),
 }
 
 
@@ -355,7 +379,8 @@ def _do_port_forward(ctx: AppContext, svc_name: str, svc_port: str) -> None:
 
     # Save the port mapping
     env.port_forwards[pf_key] = local_port
-    profile.save_env(env, ctx)
+    entry = ctx.profiles.save(env)
+    trust(entry.path)
 
     print_status(f'Forwarding localhost:{local_port} → svc/{svc_name}:{svc_port} (Ctrl+C to stop)')
     ctx.kubectl.port_forward(svc_name, ctx.namespace, local_port, svc_port)
@@ -496,13 +521,15 @@ def cmd_status(ctx: AppContext) -> None:
 
 # -- Help ---------------------------------------------------------------------
 
-def show_help(ctx: AppContext) -> None:
+def show_help() -> None:
     print(f'{_BOLD}k8s-env{_NC} — Kubernetes environment helper\n')
     print(f'{_BOLD}Usage:{_NC} k8s-env <command> [args] [-n namespace]\n')
     print(f'{_BOLD}Environment:{_NC}')
     print('  use                    Discover local k8s runtimes and set active namespace')
     print('  use-remote <host>      Discover k8s runtimes on remote host via SSH and set active namespace')
     print('  ctx                    Show active environment (no cluster queries)')
+    print('  allow                  Trust .k8s-env in current directory')
+    print('  deny                   Remove trust for .k8s-env in current directory')
     print()
     print(f'{_BOLD}Profiles:{_NC}')
     print('  profile                List saved profiles')
@@ -534,12 +561,6 @@ def show_help(ctx: AppContext) -> None:
     print('  -t                     Generate new token (used with dashboard)')
     print('  -n <namespace>         Override saved namespace')
     print('  -h, --help             Show this help')
-    print()
-    # Show active environment if one is saved
-    try:
-        print_banner(ctx)
-    except SystemExit:
-        print(f'{_DIM}No active environment set. Run: k8s-env use{_NC}')
 
 
 # -- Main ---------------------------------------------------------------------
@@ -548,6 +569,8 @@ _COMMANDS = {
     'use':          lambda ctx, _arg: cmd_use(ctx),
     'use-remote':   lambda ctx, arg:  cmd_use_remote(ctx, arg),
     'ctx':          lambda ctx, _arg: cmd_ctx(ctx),
+    'allow':        lambda ctx, _arg: cmd_allow(ctx),
+    'deny':         lambda ctx, _arg: cmd_deny(ctx),
     'profile':      lambda ctx, arg:  cmd_profile(ctx, arg),
     'namespaces':   lambda ctx, _arg: cmd_namespaces(ctx),
     'ns':           lambda ctx, _arg: cmd_namespaces(ctx),
@@ -602,21 +625,21 @@ def main() -> None:
             positional.append(args[i])
             i += 1
 
-    ctx = AppContext(ns_override=ns_override, follow=follow, new_token=new_token)
     command = positional[0] if positional else ''
     arg = positional[1] if len(positional) > 1 else ''
 
     if show_help_flag or not command:
-        show_help(ctx)
+        show_help()
         return
 
     handler = _COMMANDS.get(command)
     if not handler:
         print_error(f'Unknown command: {command}')
         print()
-        show_help(ctx)
+        show_help()
         sys.exit(1)
 
+    ctx = AppContext(ns_override=ns_override, follow=follow, new_token=new_token)
     try:
         handler(ctx, arg)
     except KeyboardInterrupt:
