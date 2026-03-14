@@ -12,17 +12,11 @@ def _path_hash(env_path: str) -> str:
 
 
 def _content_hash(file_path: str) -> str:
-    path = os.path.abspath(file_path)
-    if not os.path.isfile(path):
-        return ''
-    with open(path, 'rb') as f:
+    with open(os.path.abspath(file_path), 'rb') as f:
         return hashlib.sha256(f.read()).hexdigest()
 
 
 def check_trusted(env_path: str) -> None:
-    path = os.path.abspath(env_path)
-    if not os.path.exists(path):
-        return
     marker = os.path.join(TRUST_DIR, _path_hash(env_path))
     if not os.path.isfile(marker):
         raise SystemExit(f'.k8s-env is not trusted. Run: {CMD} allow')

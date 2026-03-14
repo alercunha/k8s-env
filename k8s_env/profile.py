@@ -4,6 +4,7 @@ import shutil
 from dataclasses import dataclass
 
 from k8s_env.service import Env
+from k8s_env.trust import trust
 from k8s_env.utils import CMD, ENV_FILE
 
 _PROFILES_DIR = os.path.join(ENV_FILE, 'profiles')
@@ -53,13 +54,14 @@ class Profiles:
     def save(self, env: Env) -> EnvEntry:
         if self.multi:
             path = self._write_profile(env.profile_name, env)
-            self._set_active(path)
+            self._symlink_active(path)
             entry = EnvEntry(name=env.profile_name, env=env, path=path)
         else:
             if os.path.islink(ENV_FILE):
                 raise SystemExit(f'{ENV_FILE} is a symlink — refusing to write')
             env.save(ENV_FILE)
             entry = EnvEntry(name=env.profile_name, env=env, path=ENV_FILE)
+        trust(entry.path)
         self._active = entry
         return entry
 
@@ -70,8 +72,9 @@ class Profiles:
         name = env.profile_name
         os.remove(ENV_FILE)
         path = self._write_profile(name, env)
-        self._set_active(path)
+        self._symlink_active(path)
         entry = EnvEntry(name=name, env=env, path=path)
+        trust(entry.path)
         self._multi = True
         self._active = entry
         return entry
@@ -95,7 +98,8 @@ class Profiles:
         path = os.path.join(_PROFILES_DIR, f'{name}.env')
         if not os.path.isfile(path):
             raise SystemExit(f'Profile not found: {name}')
-        self._set_active(path)
+        self._symlink_active(path)
+        trust(path)
         self._active = EnvEntry(name=name, env=Env.load(path), path=path)
 
     def delete(self, name: str) -> None:
@@ -117,7 +121,7 @@ class Profiles:
         env.save(path)
         return path
 
-    def _set_active(self, path: str) -> None:
+    def _symlink_active(self, path: str) -> None:
         rel = os.path.relpath(path, ENV_FILE)
         tmp = _ACTIVE_LINK + '.tmp'
         os.symlink(rel, tmp)

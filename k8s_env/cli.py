@@ -129,8 +129,7 @@ def cmd_use(ctx: AppContext) -> None:
     selected = entries[pick('Available namespaces', labels, groups=groups)[0][0]]
 
     env = Env(tool=selected.tool, context=selected.context, namespace=selected.namespace)
-    entry = ctx.profiles.save(env)
-    trust(entry.path)
+    ctx.profiles.save(env)
     print()
     print_status(f'Set to {_BOLD}{selected.group}{_NC} namespace: {_BOLD}{selected.namespace}{_NC}')
 
@@ -150,8 +149,7 @@ def cmd_use_remote(ctx: AppContext, host: str) -> None:
     selected = entries[pick(f'Namespaces on {host}', labels, groups=groups)[0][0]]
 
     env = Env(tool=selected.tool, ssh_host=host, namespace=selected.namespace)
-    entry = ctx.profiles.save(env)
-    trust(entry.path)
+    ctx.profiles.save(env)
     print()
     print_status(f'Set to {_YELLOW}{selected.tool} ssh{_NC} host: {_BOLD}{host}{_NC} namespace: {_BOLD}{selected.namespace}{_NC}')
 
@@ -202,7 +200,6 @@ def _profile_list(ctx: AppContext) -> None:
 
 def _profile_init(ctx: AppContext) -> None:
     entry = ctx.profiles.init_multi()
-    trust(entry.path)
     print_status(f'Initialized profiles with {_BOLD}{entry.name}{_NC}')
 
 
@@ -214,7 +211,6 @@ def _profile_activate(ctx: AppContext) -> None:
     items = [_entry_label(e, active) for e in entries]
     selected = entries[pick('Activate profile', items)[0][0]]
     ctx.profiles.activate(selected.name)
-    trust(ctx.profiles.active.path)
     print()
     print_status(f'Activated profile {_BOLD}{selected.name}{_NC}')
 
@@ -380,8 +376,7 @@ def _do_port_forward(ctx: AppContext, svc_name: str, svc_port: str) -> None:
 
     # Save the port mapping
     env.port_forwards[pf_key] = local_port
-    entry = ctx.profiles.save(env)
-    trust(entry.path)
+    ctx.profiles.save(env)
 
     print_status(f'Forwarding localhost:{local_port} → svc/{svc_name}:{svc_port} (Ctrl+C to stop)')
     ctx.kubectl.port_forward(svc_name, ctx.namespace, local_port, svc_port)
