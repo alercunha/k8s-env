@@ -27,9 +27,10 @@ def check_trusted(env_path: str) -> None:
 
 
 def trust(env_path: str) -> None:
-    os.makedirs(TRUST_DIR, exist_ok=True)
+    os.makedirs(TRUST_DIR, mode=0o700, exist_ok=True)
     marker = os.path.join(TRUST_DIR, _path_hash(env_path))
-    with open(marker, 'w') as f:
+    fd = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, 'w') as f:
         f.write(_content_hash(env_path))
 
 

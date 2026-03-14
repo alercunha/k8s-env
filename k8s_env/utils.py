@@ -13,9 +13,9 @@ SYSTEM_NAMESPACES = frozenset({
 
 _VALIDATORS = {
     'tool':      re.compile(r'^(microk8s|microk8s-ssh|minikube|minikube-ssh|k8s)$'),
-    'context':   re.compile(r'^[A-Za-z0-9._:@/-]+$'),
+    'context':   re.compile(r'^[A-Za-z0-9._:@-]+$'),
     'namespace': re.compile(r'^[a-z0-9][-a-z0-9]*[a-z0-9]?$'),
-    'host':      re.compile(r'^[A-Za-z0-9._@:/-]+$'),
+    'host':      re.compile(r'^[A-Za-z0-9._@:-]+$'),
     'profile':   re.compile(r'^[a-z0-9][-a-z0-9]*$'),
 }
 
