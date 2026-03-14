@@ -230,6 +230,8 @@ class K8sContext(KubeCtl):
 class SshKubeCtl(KubeCtl):
     """Decorator that routes any KubeCtl through SSH."""
 
+    _SSH_OPTS = ['-o', 'ForwardAgent=no', '-o', 'ForwardX11=no']
+
     def __init__(self, inner: KubeCtl, host: str):
         self._inner = inner
         self._host = host
@@ -257,7 +259,7 @@ class SshKubeCtl(KubeCtl):
         remote_cmd = shlex.join(self._base_cmd() + cmd_args)
         try:
             result = subprocess.run(
-                ['ssh', '-n', '--', self._host, remote_cmd],
+                ['ssh', '-n'] + self._SSH_OPTS + ['--', self._host, remote_cmd],
                 capture_output=True, text=True,
                 timeout=timeout + 5 if timeout else None,
             )
@@ -269,12 +271,12 @@ class SshKubeCtl(KubeCtl):
 
     def stream(self, *args: str) -> None:
         remote_cmd = shlex.join(self._base_cmd() + list(args))
-        subprocess.run(['ssh', '-n', '--', self._host, remote_cmd])
+        subprocess.run(['ssh', '-n'] + self._SSH_OPTS + ['--', self._host, remote_cmd])
 
     def stream_tty(self, *args: str) -> None:
         # Replace process with ssh -t for TTY allocation
         remote_cmd = shlex.join(self._base_cmd() + list(args))
-        os.execvp('ssh', ['ssh', '-t', '--', self._host, remote_cmd])
+        os.execvp('ssh', ['ssh', '-t'] + self._SSH_OPTS + ['--', self._host, remote_cmd])
 
 
 # -- Factory -----------------------------------------------------------------

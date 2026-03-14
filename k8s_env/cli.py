@@ -169,8 +169,23 @@ def cmd_ctx(ctx: AppContext) -> None:
     print(f'{_CYAN}[{source}]{_NC} {" ".join(parts)} / {_BOLD}{env.namespace}{_NC}')
 
 
+def _confirm_trust(env: Env) -> None:
+    print(f'{_BOLD}Trusting .k8s-env:{_NC}')
+    print(f'  tool:      {env.tool}')
+    if env.ssh_host:
+        print(f'  ssh_host:  {_YELLOW}{env.ssh_host}{_NC}')
+    if env.context:
+        print(f'  context:   {env.context}')
+    print(f'  namespace: {env.namespace}')
+    raw = input(f'\nAllow? [y/N]: ').strip().lower()
+    if raw != 'y':
+        raise SystemExit('Aborted')
+
+
 def cmd_allow(ctx: AppContext) -> None:
-    trust(ctx.profiles.active.path)
+    entry = ctx.profiles.active
+    _confirm_trust(entry.env)
+    trust(entry.path)
     print_status('Trusted .k8s-env in current directory')
 
 

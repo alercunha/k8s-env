@@ -16,13 +16,13 @@ def _content_hash(file_path: str) -> str:
         return hashlib.sha256(f.read()).hexdigest()
 
 
-def check_trusted(env_path: str) -> None:
+def check_trusted(env_path: str, content_hash: str) -> None:
     marker = os.path.join(TRUST_DIR, _path_hash(env_path))
     if not os.path.isfile(marker):
         raise SystemExit(f'.k8s-env is not trusted. Run: {CMD} allow')
     with open(marker) as f:
         stored = f.read().strip()
-    if stored != _content_hash(env_path):
+    if stored != content_hash:
         raise SystemExit(f'.k8s-env has changed since last allowed. Run: {CMD} allow')
 
 

@@ -17,7 +17,8 @@ class AppContext:
     @property
     def env(self):
         if not self._trusted:
-            check_trusted(self.profiles.active.path)
+            entry = self.profiles.active
+            check_trusted(entry.path, entry.env.content_hash)
             self._trusted = True
         return self.profiles.active.env
 

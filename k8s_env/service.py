@@ -1,4 +1,5 @@
 from __future__ import annotations
+import hashlib
 import os
 import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -14,34 +15,39 @@ class Env:
     def __init__(
         self, tool: str, ssh_host: str = '', context: str = '',
         namespace: str = '', port_forwards: dict[str, str] | None = None,
+        content_hash: str = '',
     ) -> None:
         self.tool = tool
         self.ssh_host = ssh_host
         self.context = context
         self.namespace = namespace
         self.port_forwards = port_forwards or {}
+        self.content_hash = content_hash
 
     @classmethod
     def load(cls, path: str) -> Env:
+        with open(path, 'rb') as f:
+            raw = f.read()
+        content_hash = hashlib.sha256(raw).hexdigest()
         # Parse key=value pairs; pf.* lines become port_forwards
         fields: dict[str, str] = {}
         port_forwards: dict[str, str] = {}
-        with open(path) as f:
-            for line in f:
-                line = line.strip()
-                if not line or '=' not in line:
-                    continue
-                key, _, val = line.partition('=')
-                if key.startswith('pf.'):
-                    port_forwards[key] = val
-                else:
-                    fields[key] = val
+        for line in raw.decode().splitlines():
+            line = line.strip()
+            if not line or '=' not in line:
+                continue
+            key, _, val = line.partition('=')
+            if key.startswith('pf.'):
+                port_forwards[key] = val
+            else:
+                fields[key] = val
         env = cls(
             tool=fields.get('tool', ''),
             ssh_host=fields.get('ssh_host', ''),
             context=fields.get('context', ''),
             namespace=fields.get('namespace', ''),
             port_forwards=port_forwards,
+            content_hash=content_hash,
         )
         env.validate()
         return env
