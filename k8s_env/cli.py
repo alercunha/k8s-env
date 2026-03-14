@@ -8,6 +8,7 @@ from k8s_env.profile import EnvEntry, Profiles
 from k8s_env.service import Env
 from k8s_env.context import AppContext
 from k8s_env.trust import trust, untrust
+from k8s_env.utils import CMD
 
 # -- Colors -------------------------------------------------------------------
 
@@ -191,7 +192,7 @@ def _entry_label(e: EnvEntry, active: str) -> str:
 def _profile_list(ctx: AppContext) -> None:
     entries = ctx.profiles.list()
     if not entries:
-        print(f'{_DIM}No profiles saved. Run: k8s-env profile init{_NC}')
+        print(f'{_DIM}No profiles saved. Run: {CMD} profile init{_NC}')
         return
     active = ctx.profiles.active_name
     print(f'{_BOLD}Profiles:{_NC}')
@@ -208,7 +209,7 @@ def _profile_init(ctx: AppContext) -> None:
 def _profile_activate(ctx: AppContext) -> None:
     entries = ctx.profiles.list()
     if not entries:
-        raise SystemExit('No profiles saved. Run: k8s-env profile init')
+        raise SystemExit(f'No profiles saved. Run: {CMD} profile init')
     active = ctx.profiles.active_name
     items = [_entry_label(e, active) for e in entries]
     selected = entries[pick('Activate profile', items)[0][0]]
@@ -522,8 +523,8 @@ def cmd_status(ctx: AppContext) -> None:
 # -- Help ---------------------------------------------------------------------
 
 def show_help() -> None:
-    print(f'{_BOLD}k8s-env{_NC} — Kubernetes environment helper\n')
-    print(f'{_BOLD}Usage:{_NC} k8s-env <command> [args] [-n namespace]\n')
+    print(f'{_BOLD}{CMD}{_NC} — Kubernetes environment helper\n')
+    print(f'{_BOLD}Usage:{_NC} {CMD} <command> [args] [-n namespace]\n')
     print(f'{_BOLD}Environment:{_NC}')
     print('  use                    Discover local k8s runtimes and set active namespace')
     print('  use-remote <host>      Discover k8s runtimes on remote host via SSH and set active namespace')

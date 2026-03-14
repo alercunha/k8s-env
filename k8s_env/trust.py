@@ -2,6 +2,8 @@ from __future__ import annotations
 import hashlib
 import os
 
+from k8s_env.utils import CMD
+
 TRUST_DIR = os.path.join(os.path.expanduser('~'), '.config', 'k8s-env', 'allowed')
 
 
@@ -23,11 +25,11 @@ def check_trusted(env_path: str) -> None:
         return
     marker = os.path.join(TRUST_DIR, _path_hash(env_path))
     if not os.path.isfile(marker):
-        raise SystemExit('.k8s-env is not trusted. Run: k8s-env allow')
+        raise SystemExit(f'.k8s-env is not trusted. Run: {CMD} allow')
     with open(marker) as f:
         stored = f.read().strip()
     if stored != _content_hash(env_path):
-        raise SystemExit('.k8s-env has changed since last allowed. Run: k8s-env allow')
+        raise SystemExit(f'.k8s-env has changed since last allowed. Run: {CMD} allow')
 
 
 def trust(env_path: str) -> None:

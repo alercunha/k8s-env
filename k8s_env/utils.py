@@ -1,8 +1,11 @@
 from __future__ import annotations
+import os
 import re
 import shutil
+import sys
 
 ENV_FILE = '.k8s-env'
+CMD = os.path.basename(sys.argv[0])
 
 SYSTEM_NAMESPACES = frozenset({
     'kube-system', 'kube-public', 'kube-node-lease', 'default',

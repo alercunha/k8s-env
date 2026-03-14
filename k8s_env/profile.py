@@ -4,7 +4,7 @@ import shutil
 from dataclasses import dataclass
 
 from k8s_env.service import Env
-from k8s_env.utils import ENV_FILE
+from k8s_env.utils import CMD, ENV_FILE
 
 _PROFILES_DIR = os.path.join(ENV_FILE, 'profiles')
 _ACTIVE_LINK = os.path.join(ENV_FILE, 'active')
@@ -38,8 +38,8 @@ class Profiles:
     def active(self) -> EnvEntry:
         if self._active is None:
             if self._multi:
-                raise SystemExit('No active profile. Run: k8s-env profile activate')
-            raise SystemExit('No environment set. Run: k8s-env use')
+                raise SystemExit(f'No active profile. Run: {CMD} profile activate')
+            raise SystemExit(f'No environment set. Run: {CMD} use')
         return self._active
 
     @property
@@ -65,7 +65,7 @@ class Profiles:
 
     def init_multi(self) -> EnvEntry:
         if self.multi:
-            raise SystemExit('Already in multi-profile mode. Use: k8s-env use')
+            raise SystemExit(f'Already in multi-profile mode. Use: {CMD} use')
         env = self.active.env
         name = env.profile_name
         os.remove(ENV_FILE)
