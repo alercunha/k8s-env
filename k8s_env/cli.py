@@ -169,23 +169,33 @@ def cmd_ctx(ctx: AppContext) -> None:
     print(f'{_CYAN}[{source}]{_NC} {" ".join(parts)} / {_BOLD}{env.namespace}{_NC}')
 
 
-def _confirm_trust(env: Env) -> None:
-    print(f'{_BOLD}Trusting .k8s-env:{_NC}')
-    print(f'  tool:      {env.tool}')
+def _env_summary(env: Env) -> str:
+    parts = [env.tool]
     if env.ssh_host:
-        print(f'  ssh_host:  {_YELLOW}{env.ssh_host}{_NC}')
-    if env.context:
-        print(f'  context:   {env.context}')
-    print(f'  namespace: {env.namespace}')
-    raw = input(f'\nAllow? [y/N]: ').strip().lower()
-    if raw != 'y':
-        raise SystemExit('Aborted')
+        parts.append(f'on {_YELLOW}{env.ssh_host}{_NC}')
+    elif env.context:
+        parts.append(f'on context {env.context}')
+    else:
+        parts.append('on local')
+    parts.append(f'namespace {env.namespace}')
+    return ' / '.join(parts)
 
 
 def cmd_allow(ctx: AppContext) -> None:
-    entry = ctx.profiles.active
-    _confirm_trust(entry.env)
-    trust(entry.path)
+    print(f'{_BOLD}Trusting .k8s-env:{_NC}')
+    if ctx.profiles.multi:
+        for entry in ctx.profiles.list():
+            print(f'  {_env_summary(entry.env)}')
+    else:
+        print(f'  {_env_summary(ctx.profiles.active.env)}')
+    raw = input(f'\nAllow? [y/N]: ').strip().lower()
+    if raw != 'y':
+        raise SystemExit('Aborted')
+    if ctx.profiles.multi:
+        for entry in ctx.profiles.list():
+            trust(entry.path)
+    else:
+        trust(ctx.profiles.active.path)
     print_status('Trusted .k8s-env in current directory')
 
 
@@ -583,6 +593,7 @@ _COMMANDS = {
     'allow':        lambda ctx, _arg: cmd_allow(ctx),
     'deny':         lambda ctx, _arg: cmd_deny(ctx),
     'profile':      lambda ctx, arg:  cmd_profile(ctx, arg),
+    'profiles':     lambda ctx, arg:  cmd_profile(ctx, arg),
     'namespaces':   lambda ctx, _arg: cmd_namespaces(ctx),
     'ns':           lambda ctx, _arg: cmd_namespaces(ctx),
     'pods':         lambda ctx, arg:  cmd_pods(ctx, arg),
