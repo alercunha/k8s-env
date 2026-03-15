@@ -200,7 +200,11 @@ def cmd_allow(ctx: AppContext) -> None:
 
 
 def cmd_deny(ctx: AppContext) -> None:
-    untrust(ctx.profiles.active.path)
+    if ctx.profiles.multi:
+        for entry in ctx.profiles.list():
+            untrust(entry.path)
+    else:
+        untrust(ctx.profiles.active.path)
     print_status('Removed trust for .k8s-env in current directory')
 
 
