@@ -21,6 +21,12 @@ _DIM = '\033[2m'
 _NC = '\033[0m'
 
 
+def _input(prompt: str) -> str:
+    if not sys.stdin.isatty():
+        raise SystemExit('This command requires an interactive terminal.')
+    return input(prompt)
+
+
 def print_status(msg: str) -> None:
     print(f'{_GREEN}[INFO]{_NC} {msg}')
 
@@ -96,9 +102,9 @@ def pick(
     print()
 
     if multi:
-        raw = input(f'Select [1-{len(items)}, comma-separated or \'all\']: ')
+        raw = _input(f'Select [1-{len(items)}, comma-separated or \'all\']: ')
     else:
-        raw = input(f'Select [1-{len(items)}]: ')
+        raw = _input(f'Select [1-{len(items)}]: ')
 
     if multi and raw.strip().lower() == 'all':
         return list(enumerate(items))
@@ -136,7 +142,7 @@ def cmd_use(ctx: AppContext) -> None:
 
 def cmd_use_remote(ctx: AppContext, host: str) -> None:
     if not host:
-        host = input('Remote host: ').strip()
+        host = _input('Remote host: ').strip()
         if not host:
             raise SystemExit('No host provided')
 
@@ -188,7 +194,7 @@ def cmd_allow(ctx: AppContext) -> None:
             print(f'  {_env_summary(entry.env)}')
     else:
         print(f'  {_env_summary(ctx.profiles.active.env)}')
-    raw = input(f'\nAllow? [y/N]: ').strip().lower()
+    raw = _input(f'\nAllow? [y/N]: ').strip().lower()
     if raw != 'y':
         raise SystemExit('Aborted')
     if ctx.profiles.multi:
@@ -358,7 +364,7 @@ def cmd_configmaps(ctx: AppContext) -> None:
     for i, cm in enumerate(cms):
         print(f'  {_CYAN}{i + 1}){_NC} {cm}')
     print()
-    raw = input(f'View configmap? [1-{len(cms)}, enter to skip]: ').strip()
+    raw = _input(f'View configmap? [1-{len(cms)}, enter to skip]: ').strip()
     if not raw:
         return
     if not raw.isdigit() or not (1 <= int(raw) <= len(cms)):
@@ -398,7 +404,7 @@ def _do_port_forward(ctx: AppContext, svc_name: str, svc_port: str) -> None:
     saved_port = env.port_forwards.get(pf_key, '')
     default_port = saved_port or svc_port
 
-    raw = input(f'Local port [{default_port}]: ').strip()
+    raw = _input(f'Local port [{default_port}]: ').strip()
     local_port = raw or default_port
     if not local_port.isdigit() or not (1 <= int(local_port) <= 65535):
         raise SystemExit(f'Invalid port: {local_port} (must be 1-65535)')
