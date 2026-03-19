@@ -10,7 +10,6 @@ __pycache__/
 
 # uv
 .venv/
-uv.lock
 
 # IDE
 .idea/
