@@ -4,22 +4,48 @@ Interactive CLI for managing Kubernetes environments across microk8s, minikube, 
 
 Pure Python 3 — no dependencies beyond the standard library.
 
+## Prerequisites
+
+- Python 3.10+
+- `kubectl`
+- At least one of: microk8s, minikube, or a configured kubectl context
+
 ## Installation
 
-Clone the repo and add it to your PATH:
+### With uv (recommended)
+
+Install as a global tool using [uv](https://docs.astral.sh/uv/):
+
+```bash
+uv tool install git+https://github.com/alercunha/k8s-env.git
+```
+
+This installs `k8s-env` into an isolated environment and adds it to your PATH. Update with:
+
+```bash
+uv tool upgrade k8s-env
+```
+
+### With pipx
+
+```bash
+pipx install git+https://github.com/alercunha/k8s-env.git
+```
+
+### With pip
+
+```bash
+pip install git+https://github.com/alercunha/k8s-env.git
+```
+
+### From source
+
+Clone the repo and either add it to your PATH or symlink the entry point:
 
 ```bash
 git clone https://github.com/alercunha/k8s-env.git
-export PATH="$PATH:$(pwd)/k8s-env"
+ln -s "$(pwd)/k8s-env/k8s-env" ~/.local/bin/k8s-env
 ```
-
-Or symlink the entry point somewhere already on your PATH:
-
-```bash
-ln -s /path/to/k8s-env/k8s-env ~/.local/bin/k8s-env
-```
-
-Requires Python 3.10+ and `kubectl` installed.
 
 ## Quick start
 
