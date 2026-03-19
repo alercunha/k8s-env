@@ -1,0 +1,10 @@
+[project]
+name = "k8s-env"
+version = "0.1.0"
+description = "Kubernetes environment manager"
+requires-python = ">=3.10"
+
+[tool.ty.environment]
+python-version = "3.10"
+
+[tool.ty.rules]

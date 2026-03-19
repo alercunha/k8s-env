@@ -1,4 +1,5 @@
 from __future__ import annotations
+import builtins
 import os
 import shutil
 from dataclasses import dataclass
@@ -79,10 +80,10 @@ class Profiles:
         self._active = entry
         return entry
 
-    def list(self) -> list[EnvEntry]:
+    def list(self) -> builtins.list[EnvEntry]:
         if not os.path.isdir(_PROFILES_DIR):
             return []
-        entries: list[EnvEntry] = []
+        entries: builtins.list[EnvEntry] = []
         for fname in sorted(os.listdir(_PROFILES_DIR)):
             if not fname.endswith('.env'):
                 continue

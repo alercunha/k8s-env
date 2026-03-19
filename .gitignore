@@ -8,6 +8,10 @@ __pycache__/
 .k8s-env
 *.env
 
+# uv
+.venv/
+uv.lock
+
 # IDE
 .idea/
 .vscode/
