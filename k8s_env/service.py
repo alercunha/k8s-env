@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 import hashlib
 import os
 import stat
@@ -7,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 
 from k8s_env import k8s
-from k8s_env.utils import ENV_FILE, is_available, validate
+from k8s_env.utils import is_available, validate
 
 DISCOVERY_TIMEOUT = 10
 
@@ -102,7 +103,10 @@ def _probe_namespaces(kubectl: k8s.KubeCtl, location: str) -> list[NamespaceEntr
     except (RuntimeError, OSError):
         return []
     group = f'{kubectl.tool_name} on {location}'
-    return [NamespaceEntry(tool=kubectl.tool_name, context=kubectl.context, namespace=ns, group=group) for ns in namespaces]
+    return [
+        NamespaceEntry(tool=kubectl.tool_name, context=kubectl.context, namespace=ns, group=group)
+        for ns in namespaces
+    ]
 
 
 def _minikube_running() -> bool:

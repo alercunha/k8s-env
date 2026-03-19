@@ -1,12 +1,13 @@
 from __future__ import annotations
+
 import shutil
 import subprocess
 import sys
 
 from k8s_env import service
-from k8s_env.profile import EnvEntry, Profiles
-from k8s_env.service import Env
 from k8s_env.context import AppContext
+from k8s_env.profile import EnvEntry
+from k8s_env.service import Env
 from k8s_env.trust import trust, untrust
 from k8s_env.utils import CMD
 
@@ -160,7 +161,8 @@ def cmd_use_remote(ctx: AppContext, host: str) -> None:
     env = Env(tool=selected.tool, ssh_host=host, namespace=selected.namespace)
     ctx.profiles.save(env)
     print()
-    print_status(f'Set to {_YELLOW}{selected.tool} ssh{_NC} host: {_BOLD}{host}{_NC} namespace: {_BOLD}{selected.namespace}{_NC}')
+    ns = selected.namespace
+    print_status(f'Set to {_YELLOW}{selected.tool} ssh{_NC} host: {_BOLD}{host}{_NC} namespace: {_BOLD}{ns}{_NC}')
 
 
 def cmd_ctx(ctx: AppContext) -> None:
@@ -197,7 +199,7 @@ def cmd_allow(ctx: AppContext) -> None:
             print(f'  {_env_summary(entry.env)}')
     else:
         print(f'  {_env_summary(ctx.profiles.active.env)}')
-    raw = _input(f'\nAllow? [y/N]: ').strip().lower()
+    raw = _input('\nAllow? [y/N]: ').strip().lower()
     if raw != 'y':
         raise SystemExit('Aborted')
     if ctx.profiles.multi:
@@ -547,7 +549,7 @@ def cmd_status(ctx: AppContext) -> None:
     print(f'  Services:     {counts["service/"]}')
     print()
 
-    not_ready = [l for l in pod_lines if 'Running' not in l and 'Completed' not in l]
+    not_ready = [line for line in pod_lines if 'Running' not in line and 'Completed' not in line]
     if not_ready:
         print_warning('Pods not running:')
         for line in not_ready:
