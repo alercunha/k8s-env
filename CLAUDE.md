@@ -1,31 +1,46 @@
 # k8s-env
 
-Kubernetes environment manager — pure Python 3 CLI with no external dependencies.
+Kubernetes environment manager — interactive CLI for switching between k8s namespaces across microk8s, minikube, kubectl contexts, and remote hosts via SSH.
 
-## Tooling
+## Checks
 
-Uses [uv](https://docs.astral.sh/uv/) for tooling. Do not use pip.
-
-### Type checking
+Run before every commit. Both must pass clean.
 
 ```
 uvx ty check
-```
-
-### Linting
-
-```
 uvx ruff check
 ```
 
-Auto-fix lint issues:
+Auto-fix lint issues with `uvx ruff check --fix`.
+
+## Project structure
 
 ```
-uvx ruff check --fix
+k8s-env              # Entry point script (#!/usr/bin/env python3)
+k8s_env/             # Main package (stdlib only — no third-party imports)
+  cli.py             # Command dispatcher, interactive picker, all cmd_* handlers
+  context.py         # AppContext — holds namespace override, flags, lazy kubectl init
+  k8s.py             # KubeCtl ABC + MicroK8s, MiniKube, K8sContext, SshKubeCtl implementations
+  service.py         # Env config class (load/save .k8s-env files), namespace discovery
+  profile.py         # Multi-profile management (EnvEntry, Profiles)
+  trust.py           # SHA256-based trust system for .k8s-env files
+  utils.py           # Validators, constants (ENV_FILE, CMD, SYSTEM_NAMESPACES)
+k8s                  # Companion bash script (independent, mirrors Python CLI)
+pyproject.toml       # Project metadata, ty and ruff configuration
 ```
 
-## Code guidelines
+## Key constraints
 
-- The script itself (`k8s-env` and `k8s_env/` package) must remain pure Python 3 with no added libraries — stdlib only.
-- All tooling (type checking, linting) runs via `uvx` without installing into the project.
-- Run both `uvx ty check` and `uvx ruff check` before committing and ensure they pass clean.
+- **Stdlib only**: The `k8s_env/` package and `k8s-env` entry point must use only Python 3.10+ standard library. No third-party runtime dependencies.
+- **uv for tooling**: Use `uv` / `uvx` for all dev tooling. Do not use pip.
+- **Interactive CLI**: Most commands use an interactive picker (`pick()` in cli.py). Non-interactive stdin causes early exit.
+- **Trust model**: `.k8s-env` files must be explicitly trusted via `allow` command before use. Trust is stored as SHA256 hashes in `~/.config/k8s-env/allowed/`.
+
+## Architecture notes
+
+- `KubeCtl` (k8s.py) is an ABC with `run()` for captured output, `stream()` for inherited stdout, and `stream_tty()` for `os.execvp` replacement. `SshKubeCtl` is a decorator that wraps any KubeCtl to route commands through SSH.
+- `k8s.get()` is a cached factory — returns the right KubeCtl subclass based on tool/context/host.
+- Discovery (`service.py`) runs namespace probes in parallel via `ThreadPoolExecutor` with a 10-second timeout per probe.
+- Profiles support single-file mode (`.k8s-env` file) and multi-profile mode (`.k8s-env/profiles/` directory with `active` symlink).
+- Errors use `SystemExit` for user-facing messages and `RuntimeError` for kubectl/SSH failures.
+- ANSI color constants are defined in cli.py (`_RED`, `_GREEN`, `_YELLOW`, `_CYAN`, `_BOLD`, `_DIM`, `_NC`).
