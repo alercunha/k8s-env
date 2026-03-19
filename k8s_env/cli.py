@@ -59,6 +59,11 @@ def print_banner(ctx: AppContext) -> None:
         print(f'{_YELLOW}[{name} local]{_NC} namespace: {_BOLD}{ns}{_NC}')
 
 
+def _filter(items: list, text: str, key=lambda x: x) -> list:
+    lower = text.lower()
+    return [x for x in items if lower in key(x).lower()]
+
+
 def print_filtered(output: str, filter_text: str) -> None:
     lines = output.rstrip('\n').splitlines()
     if not lines:
@@ -68,10 +73,8 @@ def print_filtered(output: str, filter_text: str) -> None:
         return
     # Always show header row, filter the rest case-insensitively
     print(lines[0])
-    lower = filter_text.lower()
-    for line in lines[1:]:
-        if lower in line.lower():
-            print(line)
+    for line in _filter(lines[1:], filter_text):
+        print(line)
 
 
 # -- Picker -------------------------------------------------------------------
@@ -329,8 +332,7 @@ def cmd_logs(ctx: AppContext, filter_text: str) -> None:
 
     pods = k.list_pods(ns)
     if filter_text:
-        lower = filter_text.lower()
-        pods = [p for p in pods if lower in p.lower()]
+        pods = _filter(pods, filter_text)
     if not pods:
         print_warning(f'No pods found in {ns}')
         return
@@ -351,11 +353,13 @@ def cmd_logs(ctx: AppContext, filter_text: str) -> None:
                 print(f'{_DIM}(no logs){_NC}')
 
 
-def cmd_configmaps(ctx: AppContext) -> None:
+def cmd_configmaps(ctx: AppContext, filter_text: str = '') -> None:
     print_banner(ctx)
     ns = ctx.namespace
 
     cms = ctx.kubectl.list_configmaps(ns)
+    if filter_text:
+        cms = _filter(cms, filter_text)
     if not cms:
         print_warning(f'No configmaps found in {ns}')
         return
@@ -380,8 +384,7 @@ def cmd_exec(ctx: AppContext, filter_text: str) -> None:
 
     pods = k.list_pods(ns)
     if filter_text:
-        lower = filter_text.lower()
-        pods = [p for p in pods if lower in p.lower()]
+        pods = _filter(pods, filter_text)
     if not pods:
         print_warning(f'No pods found in {ns}')
         return
@@ -424,8 +427,7 @@ def cmd_restart(ctx: AppContext, filter_text: str) -> None:
 
     deployments = k.list_deployments(ns)
     if filter_text:
-        lower = filter_text.lower()
-        deployments = [d for d in deployments if lower in d.lower()]
+        deployments = _filter(deployments, filter_text)
     if not deployments:
         print_warning(f'No deployments found in {ns}')
         return
@@ -441,12 +443,14 @@ def cmd_restart(ctx: AppContext, filter_text: str) -> None:
     print_status('Done')
 
 
-def cmd_port_forward(ctx: AppContext) -> None:
+def cmd_port_forward(ctx: AppContext, filter_text: str = '') -> None:
     print_banner(ctx)
     if ctx.kubectl.ssh_host:
         raise SystemExit('port-forward is not supported over SSH sessions')
 
     pairs = ctx.kubectl.list_services_with_ports(ctx.namespace)
+    if filter_text:
+        pairs = _filter(pairs, filter_text, key=lambda x: x[0])
     if not pairs:
         print_warning(f'No services found in {ctx.namespace}')
         return
@@ -455,17 +459,19 @@ def cmd_port_forward(ctx: AppContext) -> None:
     _do_port_forward(ctx, svc_name, svc_port)
 
 
-def cmd_app(ctx: AppContext) -> None:
+def cmd_app(ctx: AppContext, filter_text: str = '') -> None:
     if ctx.kubectl.ssh_host:
         raise SystemExit('app is not supported over SSH sessions')
 
     if ctx.env.tool == 'minikube':
         print_warning("minikube doesn't expose NodePorts on localhost — using port-forward instead")
-        cmd_port_forward(ctx)
+        cmd_port_forward(ctx, filter_text)
         return
 
     print_banner(ctx)
     pairs = ctx.kubectl.list_nodeport_services(ctx.namespace)
+    if filter_text:
+        pairs = _filter(pairs, filter_text, key=lambda x: x[0])
     if not pairs:
         print_warning(f'No NodePort services found in {ctx.namespace}')
         return
@@ -574,7 +580,7 @@ def show_help() -> None:
     print('  services [filter]      List services')
     print('  namespaces             List all namespaces')
     print('  events [filter]        Show recent events')
-    print('  configmaps             List configmaps (interactive viewer)')
+    print('  configmaps [filter]    List configmaps (interactive viewer)')
     print('  secrets [filter]       List secret names')
     print('  cronjobs [filter]      List cronjobs')
     print('  status                 Show cluster and namespace stats')
@@ -583,8 +589,8 @@ def show_help() -> None:
     print(f'{_BOLD}Actions:{_NC}')
     print('  exec [filter]          Open a shell in a pod (interactive picker)')
     print('  restart [filter]       Restart deployments (interactive multi-picker)')
-    print('  port-forward           Forward a service port (local only)')
-    print('  app                    Open a NodePort service in browser (local only)')
+    print('  port-forward [filter]  Forward a service port (local only)')
+    print('  app [filter]           Open a NodePort service in browser (local only)')
     print('  dashboard [-t]         Open Headlamp dashboard (-t to generate new token)')
     print()
     print(f'{_BOLD}Options:{_NC}')
@@ -614,16 +620,16 @@ _COMMANDS = {
     'cronjobs':     lambda ctx, arg:  cmd_cronjobs(ctx, arg),
     'cj':           lambda ctx, arg:  cmd_cronjobs(ctx, arg),
     'events':       lambda ctx, arg:  cmd_events(ctx, arg),
-    'configmaps':   lambda ctx, _arg: cmd_configmaps(ctx),
-    'cm':           lambda ctx, _arg: cmd_configmaps(ctx),
+    'configmaps':   lambda ctx, arg:  cmd_configmaps(ctx, arg),
+    'cm':           lambda ctx, arg:  cmd_configmaps(ctx, arg),
     'exec':         lambda ctx, arg:  cmd_exec(ctx, arg),
     'sh':           lambda ctx, arg:  cmd_exec(ctx, arg),
     'describe':     lambda ctx, arg:  cmd_describe(ctx, arg),
     'desc':         lambda ctx, arg:  cmd_describe(ctx, arg),
     'restart':      lambda ctx, arg:  cmd_restart(ctx, arg),
-    'port-forward': lambda ctx, _arg: cmd_port_forward(ctx),
-    'pf':           lambda ctx, _arg: cmd_port_forward(ctx),
-    'app':          lambda ctx, _arg: cmd_app(ctx),
+    'port-forward': lambda ctx, arg:  cmd_port_forward(ctx, arg),
+    'pf':           lambda ctx, arg:  cmd_port_forward(ctx, arg),
+    'app':          lambda ctx, arg:  cmd_app(ctx, arg),
     'dashboard':    lambda ctx, _arg: cmd_dashboard(ctx),
     'status':       lambda ctx, _arg: cmd_status(ctx),
     'st':           lambda ctx, _arg: cmd_status(ctx),
