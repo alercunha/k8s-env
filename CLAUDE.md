@@ -22,13 +22,15 @@ k8s_env/             # Main package (stdlib only — no third-party imports)
   profile.py         # Multi-profile management (EnvEntry, Profiles)
   trust.py           # SHA256-based trust system for .k8s-env files
   utils.py           # Validators, constants (ENV_FILE, CMD, SYSTEM_NAMESPACES)
-k8s                  # Companion bash script (independent, mirrors Python CLI)
+contrib/
+  k8s                # Standalone bash alternative (drop-in replacement, limited features)
+  README.md          # Differences between bash and Python versions
 pyproject.toml       # Project metadata, pylint configuration
 ```
 
 ## Key constraints
 
-- **Stdlib only**: The `k8s_env/` package and `k8s-env` entry point must use only Python 3.10+ standard library. No third-party runtime dependencies.
+- **Stdlib only**: The `k8s_env/` package and `k8s-env` entry point must use only Python 3.10+ standard library. No third-party runtime dependencies. The installed console script is `k8s` (see `[project.scripts]` in pyproject.toml).
 - **uv for tooling**: Use `uv` / `uvx` for all dev tooling. Do not use pip.
 - **Interactive CLI**: Most commands use an interactive picker (`pick()` in cli.py). Non-interactive stdin causes early exit.
 - **Trust model**: `.k8s-env` files must be explicitly trusted via `allow` command before use. Trust is stored as SHA256 hashes in `~/.config/k8s-env/allowed/`.

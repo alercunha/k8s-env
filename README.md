@@ -20,7 +20,7 @@ Install as a global tool using [uv](https://docs.astral.sh/uv/):
 uv tool install git+https://github.com/alercunha/k8s-env.git
 ```
 
-This installs `k8s-env` into an isolated environment and adds it to your PATH. Update with:
+This installs `k8s` into an isolated environment and adds it to your PATH. Update with:
 
 ```bash
 uv tool upgrade k8s-env
@@ -52,7 +52,7 @@ ln -s "$(pwd)/k8s-env/k8s-env" ~/.local/bin/k8s-env
 Discover local Kubernetes runtimes and pick a namespace:
 
 ```
-k8s-env use
+k8s use
 ```
 
 This probes microk8s, minikube, and all kubectl contexts in parallel, then presents an interactive picker. Your selection is saved to `.k8s-env` in the current directory.
@@ -60,13 +60,13 @@ This probes microk8s, minikube, and all kubectl contexts in parallel, then prese
 For remote hosts via SSH:
 
 ```
-k8s-env use-remote myhost
+k8s use-remote myhost
 ```
 
 Check which environment is active:
 
 ```
-k8s-env ctx
+k8s ctx
 ```
 
 ## Trust
@@ -74,10 +74,10 @@ k8s-env ctx
 The first time you use a `.k8s-env` file (or after it changes), you'll be prompted to trust it:
 
 ```
-k8s-env allow
+k8s allow
 ```
 
-This prevents unexpected execution from modified config files. Remove trust with `k8s-env deny`.
+This prevents unexpected execution from modified config files. Remove trust with `k8s deny`.
 
 ## Commands
 
@@ -144,3 +144,7 @@ All inspection commands support an optional filter argument to narrow results by
 - **minikube** — detected via `minikube status` + `kubectl --context minikube`
 - **kubectl contexts** — all contexts from `kubectl config get-contexts`
 - **SSH** — any of the above routed through SSH to a remote host
+
+## Bash alternative
+
+A standalone Bash drop-in replacement is available in [`contrib/k8s`](contrib/) for systems where Python 3.10+ cannot be installed. It covers the core commands but does not support the trust system, profiles, or parallel discovery. See [`contrib/README.md`](contrib/README.md) for details.
