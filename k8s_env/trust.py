@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 import hashlib
 import os
 
@@ -20,7 +21,7 @@ def check_trusted(env_path: str, content_hash: str) -> None:
     marker = os.path.join(TRUST_DIR, _path_hash(env_path))
     if not os.path.isfile(marker):
         raise SystemExit(f'.k8s-env is not trusted. Run: {CMD} allow')
-    with open(marker) as f:
+    with open(marker, encoding="utf-8") as f:
         stored = f.read().strip()
     if stored != content_hash:
         raise SystemExit(f'.k8s-env has changed since last allowed. Run: {CMD} allow')

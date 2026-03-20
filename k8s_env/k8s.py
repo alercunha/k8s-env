@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 import os
 import shlex
 import subprocess
@@ -38,8 +39,8 @@ class KubeCtl(ABC):
                 cmd, capture_output=True, text=True,
                 timeout=timeout + 5 if timeout else None,
             )
-        except subprocess.TimeoutExpired:
-            raise RuntimeError(f'Command timed out: {shlex.join(cmd)}')
+        except subprocess.TimeoutExpired as err:
+            raise RuntimeError(f'Command timed out: {shlex.join(cmd)}') from err
         if result.returncode != 0:
             raise RuntimeError(result.stderr.strip() or f'Command failed: {shlex.join(cmd)}')
         return result.stdout
@@ -241,7 +242,7 @@ class SshKubeCtl(KubeCtl):
         self._host = host
 
     def _base_cmd(self) -> list[str]:
-        return self._inner._base_cmd()
+        return self._inner._base_cmd()  # pylint: disable=protected-access
 
     @property
     def tool_name(self) -> str:
@@ -267,8 +268,8 @@ class SshKubeCtl(KubeCtl):
                 capture_output=True, text=True,
                 timeout=timeout + 5 if timeout else None,
             )
-        except subprocess.TimeoutExpired:
-            raise RuntimeError(f'SSH command timed out on {self._host}')
+        except subprocess.TimeoutExpired as err:
+            raise RuntimeError(f'SSH command timed out on {self._host}') from err
         if result.returncode != 0:
             raise RuntimeError(result.stderr.strip() or f'SSH command failed on {self._host}')
         return result.stdout

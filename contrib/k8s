@@ -401,6 +401,19 @@ cmd_use_remote() {
     print_status "Set to ${YELLOW}$runtime ssh${NC} host: ${BOLD}$host${NC} namespace: ${BOLD}$ns${NC}"
 }
 
+cmd_ctx() {
+    load_env
+    local parts="$ENV_TOOL"
+    if [ -n "$ENV_SSH_HOST" ]; then
+        parts="$parts on $ENV_SSH_HOST"
+    elif [ -n "$ENV_CTX" ]; then
+        parts="$parts on context: $ENV_CTX"
+    else
+        parts="$parts on local"
+    fi
+    echo -e "${CYAN}[local]${NC} $parts / ${BOLD}$ENV_NS${NC}"
+}
+
 cmd_pods() {
     require_env
     print_status "Pods in ${BOLD}$NS${NC}"
@@ -729,9 +742,10 @@ show_help() {
     echo ""
     echo -e "${BOLD}Usage:${NC} k8s <command> [args] [-n namespace]"
     echo ""
-    echo -e "${BOLD}Namespace:${NC}"
+    echo -e "${BOLD}Environment:${NC}"
     echo "  use                    Pick namespace from local microk8s/minikube + k8s contexts"
     echo "  use-remote <host>      Pick namespace from remote microk8s/minikube via SSH"
+    echo "  ctx                    Show active environment (no cluster queries)"
     echo ""
     echo -e "${BOLD}Inspection:${NC}"
     echo "  pods [filter]          List pods (filter by name)"
@@ -772,6 +786,7 @@ case "$CMD" in
     ""|"-h"|"--help") show_help ;;
     use)              cmd_use ;;
     use-remote)       cmd_use_remote ;;
+    ctx)              cmd_ctx ;;
     pods)             cmd_pods ;;
     logs)             cmd_logs ;;
     restart)          cmd_restart ;;
