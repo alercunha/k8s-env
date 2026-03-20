@@ -43,7 +43,7 @@ def print_error(msg: str) -> None:
 def open_url(url: str) -> None:
     for cmd in ('xdg-open', 'open'):
         if shutil.which(cmd):
-            subprocess.Popen([cmd, url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.Popen([cmd, url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)  # pylint: disable=consider-using-with
             return
     print_warning(f'Could not open browser. Visit {url} manually.')
 
@@ -117,7 +117,7 @@ def pick(
     selected: list[tuple[int, str]] = []
     for part in raw.split(','):
         part = part.strip()
-        if not part.isdigit() or not (1 <= int(part) <= len(items)):
+        if not part.isdigit() or not 1 <= int(part) <= len(items):
             raise SystemExit(f'Invalid selection: {part}')
         idx = int(part) - 1
         selected.append((idx, items[idx]))
@@ -373,7 +373,7 @@ def cmd_configmaps(ctx: AppContext, filter_text: str = '') -> None:
     raw = _input(f'View configmap? [1-{len(cms)}, enter to skip]: ').strip()
     if not raw:
         return
-    if not raw.isdigit() or not (1 <= int(raw) <= len(cms)):
+    if not raw.isdigit() or not 1 <= int(raw) <= len(cms):
         raise SystemExit(f'Invalid selection: {raw}')
     print()
     print(ctx.kubectl.get_configmap_yaml(cms[int(raw) - 1], ns), end='')
@@ -411,7 +411,7 @@ def _do_port_forward(ctx: AppContext, svc_name: str, svc_port: str) -> None:
 
     raw = _input(f'Local port [{default_port}]: ').strip()
     local_port = raw or default_port
-    if not local_port.isdigit() or not (1 <= int(local_port) <= 65535):
+    if not local_port.isdigit() or not 1 <= int(local_port) <= 65535:
         raise SystemExit(f'Invalid port: {local_port} (must be 1-65535)')
 
     # Save the port mapping
@@ -478,7 +478,7 @@ def cmd_app(ctx: AppContext, filter_text: str = '') -> None:
         print_warning(f'No NodePort services found in {ctx.namespace}')
         return
 
-    svc_name, node_port = _pick_service(pairs, f'NodePort services in {ctx.namespace}', 'nodePort')
+    _, node_port = _pick_service(pairs, f'NodePort services in {ctx.namespace}', 'nodePort')
     url = f'http://localhost:{node_port}'
     print_status(f'Opening {_BOLD}{url}{_NC}')
     open_url(url)

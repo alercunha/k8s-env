@@ -66,7 +66,7 @@ class Env:
         if self.ssh_host:
             validate('host', self.ssh_host)
         for key, val in self.port_forwards.items():
-            if not val.isdigit() or not (1 <= int(val) <= 65535):
+            if not val.isdigit() or not 1 <= int(val) <= 65535:
                 raise ValueError(f"Invalid port forward value for {key}: '{val}'")
 
     def save(self, path: str) -> None:

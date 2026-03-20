@@ -242,7 +242,7 @@ class SshKubeCtl(KubeCtl):
         self._host = host
 
     def _base_cmd(self) -> list[str]:
-        return self._inner._base_cmd()
+        return self._inner._base_cmd()  # pylint: disable=protected-access
 
     @property
     def tool_name(self) -> str:

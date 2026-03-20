@@ -4,14 +4,11 @@ Kubernetes environment manager — interactive CLI for switching between k8s nam
 
 ## Checks
 
-Run before every commit. Both must pass clean.
+Run before every commit. Must pass clean.
 
 ```
-uvx ty check
-uvx ruff check
+uvx pylint k8s_env/
 ```
-
-Auto-fix lint issues with `uvx ruff check --fix`.
 
 ## Project structure
 
@@ -26,7 +23,7 @@ k8s_env/             # Main package (stdlib only — no third-party imports)
   trust.py           # SHA256-based trust system for .k8s-env files
   utils.py           # Validators, constants (ENV_FILE, CMD, SYSTEM_NAMESPACES)
 k8s                  # Companion bash script (independent, mirrors Python CLI)
-pyproject.toml       # Project metadata, ty and ruff configuration
+pyproject.toml       # Project metadata, pylint configuration
 ```
 
 ## Key constraints
