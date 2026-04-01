@@ -52,7 +52,7 @@ ln -s "$(pwd)/k8s-env/k8s-env" ~/.local/bin/k8s-env
 Discover local Kubernetes runtimes and pick a namespace:
 
 ```
-k8s use
+k8s ctx add
 ```
 
 This probes microk8s, minikube, and all kubectl contexts in parallel, then presents an interactive picker. Your selection is saved to `.k8s-env` in the current directory.
@@ -60,14 +60,16 @@ This probes microk8s, minikube, and all kubectl contexts in parallel, then prese
 For remote hosts via SSH:
 
 ```
-k8s use-remote myhost
+k8s ctx add-remote myhost
 ```
 
-Check which environment is active:
+Show saved contexts:
 
 ```
 k8s ctx
 ```
+
+Adding a second context automatically converts to multi-profile mode (`.k8s-env/` directory). Switch between contexts with `k8s ctx set`.
 
 ## Trust
 
@@ -81,26 +83,17 @@ This prevents unexpected execution from modified config files. Remove trust with
 
 ## Commands
 
-### Environment
+### Context
 
 | Command | Description |
 |---|---|
-| `use` | Discover local k8s runtimes and set active namespace |
-| `use-remote <host>` | Discover runtimes on a remote host via SSH |
-| `ctx` | Show active environment (no cluster queries) |
+| `ctx` | Show saved contexts |
+| `ctx add` | Add local k8s namespace as context |
+| `ctx add-remote [host]` | Add remote k8s namespace via SSH |
+| `ctx set` | Switch active context |
+| `ctx del` | Delete a saved context |
 | `allow` | Trust `.k8s-env` in current directory |
 | `deny` | Remove trust for `.k8s-env` |
-
-### Profiles
-
-Manage multiple environments per project:
-
-| Command | Description |
-|---|---|
-| `profile` | List saved profiles |
-| `profile init` | Convert single-file config to multi-profile mode |
-| `profile activate` | Switch to a different profile |
-| `profile delete` | Delete a saved profile |
 
 ### Inspection
 
@@ -135,6 +128,7 @@ All inspection commands support an optional filter argument to narrow results by
 |---|---|
 | `-n <namespace>` | Override the saved namespace for this invocation |
 | `-f` | Follow logs (used with `logs`) |
+| `--tail <lines>` | Number of log lines to show (default 20, -1 for all) |
 | `-t` | Generate new token (used with `dashboard`) |
 | `-h, --help` | Show help |
 
