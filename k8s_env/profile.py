@@ -41,20 +41,22 @@ class Profiles:
     def active(self) -> EnvEntry:
         if self._active is None:
             if self._multi:
-                raise SystemExit(f'No active profile. Run: {CMD} profile activate')
-            raise SystemExit(f'No environment set. Run: {CMD} use')
+                raise SystemExit(f'No active context. Run: {CMD} ctx set')
+            raise SystemExit(f'No environment set. Run: {CMD} ctx add')
         return self._active
 
     @property
     def active_name(self) -> str:
-        return self.active.name
+        return self._active.name if self._active else ''
 
     @property
     def multi(self) -> bool:
         return self._multi
 
     def save(self, env: Env) -> EnvEntry:
-        if self.multi:
+        if not self._multi and self._active and self._active.name != env.profile_name:
+            self._convert_to_multi()
+        if self._multi:
             path = self._write_profile(env.profile_name, env)
             self._symlink_active(path)
             entry = EnvEntry(name=env.profile_name, env=env, path=path)
@@ -67,21 +69,16 @@ class Profiles:
         self._active = entry
         return entry
 
-    def init_multi(self) -> EnvEntry:
-        if self.multi:
-            raise SystemExit(f'Already in multi-profile mode. Use: {CMD} use')
-        env = self.active.env
-        name = env.profile_name
+    def _convert_to_multi(self) -> None:
+        current_env = self._active.env
         os.remove(ENV_FILE)
-        path = self._write_profile(name, env)
-        self._symlink_active(path)
-        entry = EnvEntry(name=name, env=env, path=path)
-        trust(entry.path)
+        current_path = self._write_profile(current_env.profile_name, current_env)
+        trust(current_path)
         self._multi = True
-        self._active = entry
-        return entry
 
     def list(self) -> builtins.list[EnvEntry]:
+        if not self._multi:
+            return [self._active] if self._active else []
         if not os.path.isdir(_PROFILES_DIR):
             return []
         entries: builtins.list[EnvEntry] = []
@@ -99,15 +96,21 @@ class Profiles:
     def activate(self, name: str) -> None:
         path = os.path.join(_PROFILES_DIR, f'{name}.env')
         if not os.path.isfile(path):
-            raise SystemExit(f'Profile not found: {name}')
+            raise SystemExit(f'Context not found: {name}')
         self._symlink_active(path)
         trust(path)
         self._active = EnvEntry(name=name, env=Env.load(path), path=path)
 
     def delete(self, name: str) -> EnvEntry | None:
+        if not self._multi:
+            if not self._active or self._active.name != name:
+                raise SystemExit(f'Context not found: {name}')
+            os.remove(ENV_FILE)
+            self._active = None
+            return None
         path = os.path.join(_PROFILES_DIR, f'{name}.env')
         if not os.path.isfile(path):
-            raise SystemExit(f'Profile not found: {name}')
+            raise SystemExit(f'Context not found: {name}')
         was_active = self._active and self._active.name == name
         if was_active:
             os.remove(_ACTIVE_LINK)

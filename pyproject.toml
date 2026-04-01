@@ -1,6 +1,6 @@
 [project]
 name = "k8s-env"
-version = "0.3.1"
+version = "0.4.0"
 description = "Kubernetes environment manager"
 requires-python = ">=3.10"
 

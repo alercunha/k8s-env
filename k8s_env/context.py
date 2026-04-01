@@ -18,12 +18,15 @@ class AppContext:
         self._trusted = False
         self._kubectl: k8s.KubeCtl | None = None
 
+    def check_trust(self) -> None:
+        if not self._trusted:
+            for entry in self.profiles.list():
+                check_trusted(entry.path, entry.env.content_hash)
+            self._trusted = True
+
     @property
     def env(self):
-        if not self._trusted:
-            entry = self.profiles.active
-            check_trusted(entry.path, entry.env.content_hash)
-            self._trusted = True
+        self.check_trust()
         return self.profiles.active.env
 
     @property
