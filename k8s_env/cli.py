@@ -579,7 +579,7 @@ def show_help() -> None:
     print()
     print(f'{_BOLD}Inspection:{_NC}')
     print('  pods [filter]          List pods (filter by name)')
-    print('  logs [filter] [-f]     Show last 20 log lines per pod (-f to follow)')
+    print('  logs [filter] [-f]     Show log lines per pod (-f to follow, --tail N)')
     print('  services [filter]      List services')
     print('  namespaces             List all namespaces')
     print('  events [filter]        Show recent events')
@@ -598,6 +598,7 @@ def show_help() -> None:
     print()
     print(f'{_BOLD}Options:{_NC}')
     print('  -f                     Follow logs (used with logs)')
+    print('  --tail <lines>         Number of log lines to show (default 20, -1 for all)')
     print('  -t                     Generate new token (used with dashboard)')
     print('  -n <namespace>         Override saved namespace')
     print('  -h, --help             Show this help')
@@ -639,11 +640,22 @@ _COMMANDS = {
 }
 
 
+def _parse_tail(value: str) -> int:
+    try:
+        tail = int(value)
+    except ValueError:
+        raise SystemExit(f'--tail requires an integer, got: {value}') from None
+    if tail == 0:
+        raise SystemExit('--tail must be a positive number or -1 for all lines')
+    return tail
+
+
 def main() -> None:
     # Parse flags and positional args (command + optional arg)
     ns_override = ''
     follow = False
     new_token = False
+    tail = 20
     positional: list[str] = []
     show_help_flag = False
 
@@ -653,6 +665,11 @@ def main() -> None:
         if args[i] == '-n' and i + 1 < len(args):
             ns_override = args[i + 1]
             i += 2
+        elif args[i] == '--tail' and i + 1 < len(args):
+            tail = _parse_tail(args[i + 1])
+            i += 2
+        elif args[i] == '--tail':
+            raise SystemExit('--tail requires a value')
         elif args[i] == '-f':
             follow = True
             i += 1
@@ -680,7 +697,7 @@ def main() -> None:
         show_help()
         sys.exit(1)
 
-    ctx = AppContext(ns_override=ns_override, follow=follow, new_token=new_token)
+    ctx = AppContext(ns_override=ns_override, follow=follow, new_token=new_token, tail=tail)
     try:
         handler(ctx, arg)
     except KeyboardInterrupt:

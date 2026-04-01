@@ -92,11 +92,15 @@ class KubeCtl(ABC):
     def get_events(self, namespace: str, timeout: int | None = None) -> str:
         return self.run('get', 'events', '-n', namespace, '--sort-by=.lastTimestamp', timeout=timeout)
 
-    def get_logs(self, pod: str, namespace: str, tail: int = 20, timeout: int | None = None) -> str:
-        return self.run('logs', f'--tail={tail}', pod, '-n', namespace, timeout=timeout)
+    @staticmethod
+    def _tail_arg(tail: int) -> str:
+        return f'--tail={tail}' if tail >= 0 else '--tail=-1'
 
-    def follow_logs(self, pod: str, namespace: str, tail: int = 50) -> None:
-        self.stream('logs', '-f', f'--tail={tail}', pod, '-n', namespace)
+    def get_logs(self, pod: str, namespace: str, tail: int = 20, timeout: int | None = None) -> str:
+        return self.run('logs', self._tail_arg(tail), pod, '-n', namespace, timeout=timeout)
+
+    def follow_logs(self, pod: str, namespace: str, tail: int = 20) -> None:
+        self.stream('logs', '-f', self._tail_arg(tail), pod, '-n', namespace)
 
     def exec_shell(self, pod: str, namespace: str) -> None:
         # Interactive shell into a pod — needs TTY
