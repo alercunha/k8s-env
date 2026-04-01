@@ -130,23 +130,16 @@ def pick(
 # -- Context commands ---------------------------------------------------------
 
 def _ctx_list(ctx: AppContext) -> None:
-    ctx.check_trust()
     entries = ctx.profiles.list()
     if not entries:
         print(f'{_DIM}No contexts saved. Run: {CMD} ctx add{_NC}')
         return
     active = ctx.profiles.active_name
     for e in entries:
-        env = e.env
-        location = env.ssh_host or env.context or 'local'
-        if e.name == active:
-            print(f'{_GREEN}[{e.name}]{_NC} {env.tool} on {location} / {env.namespace} {_GREEN}(active){_NC}')
-        else:
-            print(f'{_DIM}[{e.name}] {env.tool} on {location} / {env.namespace}{_NC}')
+        print(_format_entry(e, active))
 
 
 def _ctx_add(ctx: AppContext) -> None:
-    ctx.check_trust()
     entries = service.discover_local()
     if not entries:
         raise SystemExit('No namespaces found (checked microk8s, minikube, and kubectl contexts)')
@@ -162,7 +155,6 @@ def _ctx_add(ctx: AppContext) -> None:
 
 
 def _ctx_add_remote(ctx: AppContext, host: str) -> None:
-    ctx.check_trust()
     if not host:
         host = _input('Remote host: ').strip()
         if not host:
@@ -184,7 +176,6 @@ def _ctx_add_remote(ctx: AppContext, host: str) -> None:
 
 
 def _ctx_set(ctx: AppContext) -> None:
-    ctx.check_trust()
     entries = ctx.profiles.list()
     if not entries:
         raise SystemExit(f'No contexts saved. Run: {CMD} ctx add')
@@ -192,7 +183,7 @@ def _ctx_set(ctx: AppContext) -> None:
         print_status(f'Already on the only context: {_BOLD}{entries[0].name}{_NC}')
         return
     active = ctx.profiles.active_name
-    items = [_entry_label(e, active) for e in entries]
+    items = [_format_entry(e, active) for e in entries]
     selected = entries[pick('Activate context', items)[0][0]]
     ctx.profiles.activate(selected.name)
     print()
@@ -200,12 +191,11 @@ def _ctx_set(ctx: AppContext) -> None:
 
 
 def _ctx_del(ctx: AppContext) -> None:
-    ctx.check_trust()
     entries = ctx.profiles.list()
     if not entries:
         raise SystemExit('No contexts saved')
     active = ctx.profiles.active_name
-    items = [_entry_label(e, active) for e in entries]
+    items = [_format_entry(e, active) for e in entries]
     selected = entries[pick('Delete context', items)[0][0]]
     new_active = ctx.profiles.delete(selected.name)
     print()
@@ -224,17 +214,19 @@ _CTX_COMMANDS = {
 
 
 def cmd_ctx(ctx: AppContext, sub: str, extra: str) -> None:
+    ctx.check_trust()
     handler = _CTX_COMMANDS.get(sub)
     if not handler:
         raise SystemExit(f'Unknown ctx subcommand: {sub}. Use: add, add-remote, set, del')
     handler(ctx, extra)
 
 
-def _entry_label(e: EnvEntry, active: str) -> str:
+def _format_entry(e: EnvEntry, active: str) -> str:
     env = e.env
     location = env.ssh_host or env.context or 'local'
-    marker = f' {_GREEN}(active){_NC}' if e.name == active else ''
-    return f'{e.name} {_DIM}— {env.tool} on {location} / {env.namespace}{_NC}{marker}'
+    if e.name == active:
+        return f'{_GREEN}[{e.name}]{_NC} {env.tool} on {location} / {env.namespace} {_GREEN}(active){_NC}'
+    return f'{_DIM}[{e.name}] {env.tool} on {location} / {env.namespace}{_NC}'
 
 
 # -- Other commands -----------------------------------------------------------
@@ -586,33 +578,35 @@ def show_help() -> None:
 
 # -- Main ---------------------------------------------------------------------
 
-_COMMANDS: dict[str, object] = {
-    'ctx':          lambda ctx, args: cmd_ctx(ctx, args[0] if args else '', args[1] if len(args) > 1 else ''),
-    'allow':        lambda ctx, _args: cmd_allow(ctx),
-    'deny':         lambda ctx, _args: cmd_deny(ctx),
-    'namespaces':   lambda ctx, _args: cmd_namespaces(ctx),
-    'ns':           lambda ctx, _args: cmd_namespaces(ctx),
-    'pods':         lambda ctx, args:  cmd_pods(ctx, args[0] if args else ''),
-    'logs':         lambda ctx, args:  cmd_logs(ctx, args[0] if args else ''),
-    'services':     lambda ctx, args:  cmd_services(ctx, args[0] if args else ''),
-    'svc':          lambda ctx, args:  cmd_services(ctx, args[0] if args else ''),
-    'secrets':      lambda ctx, args:  cmd_secrets(ctx, args[0] if args else ''),
-    'cronjobs':     lambda ctx, args:  cmd_cronjobs(ctx, args[0] if args else ''),
-    'cj':           lambda ctx, args:  cmd_cronjobs(ctx, args[0] if args else ''),
-    'events':       lambda ctx, args:  cmd_events(ctx, args[0] if args else ''),
-    'configmaps':   lambda ctx, args:  cmd_configmaps(ctx, args[0] if args else ''),
-    'cm':           lambda ctx, args:  cmd_configmaps(ctx, args[0] if args else ''),
-    'exec':         lambda ctx, args:  cmd_exec(ctx, args[0] if args else ''),
-    'sh':           lambda ctx, args:  cmd_exec(ctx, args[0] if args else ''),
-    'describe':     lambda ctx, args:  cmd_describe(ctx, args[0] if args else ''),
-    'desc':         lambda ctx, args:  cmd_describe(ctx, args[0] if args else ''),
-    'restart':      lambda ctx, args:  cmd_restart(ctx, args[0] if args else ''),
-    'port-forward': lambda ctx, args:  cmd_port_forward(ctx, args[0] if args else ''),
-    'pf':           lambda ctx, args:  cmd_port_forward(ctx, args[0] if args else ''),
-    'app':          lambda ctx, args:  cmd_app(ctx, args[0] if args else ''),
-    'dashboard':    lambda ctx, _args: cmd_dashboard(ctx),
-    'status':       lambda ctx, _args: cmd_status(ctx),
-    'st':           lambda ctx, _args: cmd_status(ctx),
+_COMMANDS = {
+    # Context
+    'allow':        lambda ctx, _arg: cmd_allow(ctx),
+    'deny':         lambda ctx, _arg: cmd_deny(ctx),
+    # Inspection
+    'pods':         lambda ctx, arg:  cmd_pods(ctx, arg),
+    'logs':         lambda ctx, arg:  cmd_logs(ctx, arg),
+    'services':     lambda ctx, arg:  cmd_services(ctx, arg),
+    'svc':          lambda ctx, arg:  cmd_services(ctx, arg),
+    'namespaces':   lambda ctx, _arg: cmd_namespaces(ctx),
+    'ns':           lambda ctx, _arg: cmd_namespaces(ctx),
+    'events':       lambda ctx, arg:  cmd_events(ctx, arg),
+    'configmaps':   lambda ctx, arg:  cmd_configmaps(ctx, arg),
+    'cm':           lambda ctx, arg:  cmd_configmaps(ctx, arg),
+    'secrets':      lambda ctx, arg:  cmd_secrets(ctx, arg),
+    'cronjobs':     lambda ctx, arg:  cmd_cronjobs(ctx, arg),
+    'cj':           lambda ctx, arg:  cmd_cronjobs(ctx, arg),
+    'status':       lambda ctx, _arg: cmd_status(ctx),
+    'st':           lambda ctx, _arg: cmd_status(ctx),
+    'describe':     lambda ctx, arg:  cmd_describe(ctx, arg),
+    'desc':         lambda ctx, arg:  cmd_describe(ctx, arg),
+    # Actions
+    'exec':         lambda ctx, arg:  cmd_exec(ctx, arg),
+    'sh':           lambda ctx, arg:  cmd_exec(ctx, arg),
+    'restart':      lambda ctx, arg:  cmd_restart(ctx, arg),
+    'port-forward': lambda ctx, arg:  cmd_port_forward(ctx, arg),
+    'pf':           lambda ctx, arg:  cmd_port_forward(ctx, arg),
+    'app':          lambda ctx, arg:  cmd_app(ctx, arg),
+    'dashboard':    lambda ctx, _arg: cmd_dashboard(ctx),
 }
 
 
@@ -626,8 +620,7 @@ def _parse_tail(value: str) -> int:
     return tail
 
 
-def main() -> None:
-    # Parse flags and positional args
+def _parse_args() -> tuple[list[str], str, bool, bool, int]:
     ns_override = ''
     follow = False
     new_token = False
@@ -659,22 +652,31 @@ def main() -> None:
             positional.append(args[i])
             i += 1
 
-    command = positional[0] if positional else ''
-
-    if show_help_flag or not command:
+    if show_help_flag or not positional:
         show_help()
-        return
+        sys.exit(0)
 
-    handler = _COMMANDS.get(command)
-    if not handler:
-        print_error(f'Unknown command: {command}')
-        print()
-        show_help()
-        sys.exit(1)
+    return positional, ns_override, follow, new_token, tail
+
+
+def main() -> None:
+    positional, ns_override, follow, new_token, tail = _parse_args()
+    command = positional[0]
+    arg = positional[1] if len(positional) > 1 else ''
 
     ctx = AppContext(ns_override=ns_override, follow=follow, new_token=new_token, tail=tail)
     try:
-        handler(ctx, positional[1:])
+        if command == 'ctx':
+            extra = positional[2] if len(positional) > 2 else ''
+            cmd_ctx(ctx, arg, extra)
+        else:
+            handler = _COMMANDS.get(command)
+            if not handler:
+                print_error(f'Unknown command: {command}')
+                print()
+                show_help()
+                sys.exit(1)
+            handler(ctx, arg)
     except KeyboardInterrupt:
         print()
     except RuntimeError as e:
