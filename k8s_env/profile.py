@@ -104,18 +104,22 @@ class Profiles:
         trust(path)
         self._active = EnvEntry(name=name, env=Env.load(path), path=path)
 
-    def delete(self, name: str) -> None:
+    def delete(self, name: str) -> EnvEntry | None:
         path = os.path.join(_PROFILES_DIR, f'{name}.env')
         if not os.path.isfile(path):
             raise SystemExit(f'Profile not found: {name}')
-        if self._active and os.path.realpath(self._active.path) == os.path.realpath(path):
+        was_active = self._active and self._active.name == name
+        if was_active:
             os.remove(_ACTIVE_LINK)
             self._active = None
         os.remove(path)
-        remaining = [f for f in os.listdir(_PROFILES_DIR) if f.endswith('.env')]
+        remaining = sorted(f for f in os.listdir(_PROFILES_DIR) if f.endswith('.env'))
         if not remaining:
             shutil.rmtree(ENV_FILE)
             self._multi = False
+        elif was_active:
+            self.activate(remaining[0].removesuffix('.env'))
+        return self._active if was_active else None
 
     def _write_profile(self, name: str, env: Env) -> str:
         os.makedirs(_PROFILES_DIR, exist_ok=True)

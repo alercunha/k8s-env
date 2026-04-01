@@ -262,9 +262,11 @@ def _profile_delete(ctx: AppContext) -> None:
     active = ctx.profiles.active_name
     items = [_entry_label(e, active) for e in entries]
     selected = entries[pick('Delete profile', items)[0][0]]
-    ctx.profiles.delete(selected.name)
+    new_active = ctx.profiles.delete(selected.name)
     print()
     print_status(f'Deleted profile {_BOLD}{selected.name}{_NC}')
+    if new_active:
+        print_status(f'Switched to profile {_BOLD}{new_active.name}{_NC}')
 
 
 _PROFILE_COMMANDS = {
@@ -343,14 +345,13 @@ def cmd_logs(ctx: AppContext, filter_text: str) -> None:
         # Pick one pod and stream its logs
         selected = pick('Follow logs for', pods, auto=True)[0][1]
         print_status(f'Tailing {_BOLD}{selected}{_NC} (Ctrl+C to stop)')
-        k.follow_logs(selected, ns)
+        k.follow_logs(selected, ns, tail=ctx.tail)
     else:
-        # Show last 20 lines per pod
         for pod in pods:
             print()
             print(f'{_CYAN}{_BOLD}--- {pod} ---{_NC}')
             try:
-                print(k.get_logs(pod, ns), end='')
+                print(k.get_logs(pod, ns, tail=ctx.tail), end='')
             except RuntimeError:
                 print(f'{_DIM}(no logs){_NC}')
 
