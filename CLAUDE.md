@@ -15,8 +15,9 @@ uvx pylint k8s_env/
 ```
 k8s-env              # Entry point script (#!/usr/bin/env python3)
 k8s_env/             # Main package (stdlib only — no third-party imports)
+  args.py            # Generic flag parser (parse_args, with_help, first)
   cli.py             # Command dispatcher, interactive picker, ctx subcommands, all cmd_* handlers
-  context.py         # AppContext — holds namespace override, flags, trust check, lazy kubectl init
+  context.py         # AppContext — holds namespace override, trust check, lazy kubectl init
   k8s.py             # KubeCtl ABC + MicroK8s, MiniKube, K8sContext, SshKubeCtl implementations
   service.py         # Env config class (load/save .k8s-env files), namespace discovery
   profile.py         # Multi-profile management (EnvEntry, Profiles)

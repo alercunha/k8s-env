@@ -3,8 +3,10 @@ from __future__ import annotations
 import shutil
 import subprocess
 import sys
+from textwrap import dedent
 
 from k8s_env import service
+from k8s_env.args import first, handle_help, parse_args
 from k8s_env.context import AppContext
 from k8s_env.profile import EnvEntry
 from k8s_env.service import Env
@@ -213,12 +215,13 @@ _CTX_COMMANDS = {
 }
 
 
-def cmd_ctx(ctx: AppContext, sub: str, extra: str) -> None:
+def cmd_ctx(ctx: AppContext, args: list[str]) -> None:
     ctx.check_trust()
+    sub = first(args)
     handler = _CTX_COMMANDS.get(sub)
     if not handler:
         raise SystemExit(f'Unknown ctx subcommand: {sub}. Use: add, add-remote, set, del')
-    handler(ctx, extra)
+    handler(ctx, first(args[1:]))
 
 
 def _format_entry(e: EnvEntry, active: str) -> str:
@@ -305,7 +308,13 @@ def cmd_events(ctx: AppContext, filter_text: str) -> None:
     print_filtered(trimmed, filter_text)
 
 
-def cmd_logs(ctx: AppContext, filter_text: str) -> None:
+def cmd_logs(ctx: AppContext, args: list[str]) -> None:
+    if handle_help(args, _show_logs_help):
+        return
+    follow, tail, rest = parse_args(args, {'-f': False, '--tail': 20})
+    if tail == 0:
+        raise SystemExit('--tail must be a positive number or -1 for all lines')
+    filter_text = first(rest)
     print_banner(ctx)
     ns = ctx.namespace
     k = ctx.kubectl
@@ -317,17 +326,17 @@ def cmd_logs(ctx: AppContext, filter_text: str) -> None:
         print_warning(f'No pods found in {ns}')
         return
 
-    if ctx.follow:
+    if follow:
         # Pick one pod and stream its logs
         selected = pick('Follow logs for', pods, auto=True)[0][1]
         print_status(f'Tailing {_BOLD}{selected}{_NC} (Ctrl+C to stop)')
-        k.follow_logs(selected, ns, tail=ctx.tail)
+        k.follow_logs(selected, ns, tail=tail)
     else:
         for pod in pods:
             print()
             print(f'{_CYAN}{_BOLD}--- {pod} ---{_NC}')
             try:
-                print(k.get_logs(pod, ns, tail=ctx.tail), end='')
+                print(k.get_logs(pod, ns, tail=tail), end='')
             except RuntimeError:
                 print(f'{_DIM}(no logs){_NC}')
 
@@ -461,7 +470,11 @@ def cmd_app(ctx: AppContext, filter_text: str = '') -> None:
     open_url(url)
 
 
-def cmd_dashboard(ctx: AppContext) -> None:
+def cmd_dashboard(ctx: AppContext, args: list[str]) -> None:
+    if handle_help(args, _show_dashboard_help):
+        return
+    new_token, _ = parse_args(args, {'-t': False})
+
     if ctx.kubectl.ssh_host:
         raise SystemExit('dashboard is not supported over SSH sessions')
 
@@ -474,7 +487,7 @@ def cmd_dashboard(ctx: AppContext) -> None:
     if not pairs:
         raise SystemExit(f'No NodePort service found in {ns}')
 
-    if ctx.new_token:
+    if new_token:
         print_status('Generating new Headlamp token (valid 1 year)...')
         token = k.create_token('headlamp', ns)
         print()
@@ -538,145 +551,123 @@ def cmd_status(ctx: AppContext) -> None:
 # -- Help ---------------------------------------------------------------------
 
 def show_help() -> None:
-    print(f'{_BOLD}{CMD}{_NC} — Kubernetes environment helper\n')
-    print(f'{_BOLD}Usage:{_NC} {CMD} <command> [args] [-n namespace]\n')
-    print(f'{_BOLD}Context:{_NC}')
-    print('  ctx                    Show saved contexts')
-    print('  ctx add                Add local k8s namespace as context')
-    print('  ctx add-remote [host]  Add remote k8s namespace via SSH')
-    print('  ctx set                Switch active context')
-    print('  ctx del                Delete a saved context')
-    print('  allow                  Trust .k8s-env in current directory')
-    print('  deny                   Remove trust for .k8s-env in current directory')
-    print()
-    print(f'{_BOLD}Inspection:{_NC}')
-    print('  pods [filter]          List pods (filter by name)')
-    print('  logs [filter] [-f]     Show log lines per pod (-f to follow, --tail N)')
-    print('  services [filter]      List services')
-    print('  namespaces             List all namespaces')
-    print('  events [filter]        Show recent events')
-    print('  configmaps [filter]    List configmaps (interactive viewer)')
-    print('  secrets [filter]       List secret names')
-    print('  cronjobs [filter]      List cronjobs')
-    print('  status                 Show cluster and namespace stats')
-    print('  describe [resource]    Describe a resource (picker if omitted)')
-    print()
-    print(f'{_BOLD}Actions:{_NC}')
-    print('  exec [filter]          Open a shell in a pod (interactive picker)')
-    print('  restart [filter]       Restart deployments (interactive multi-picker)')
-    print('  port-forward [filter]  Forward a service port (local only)')
-    print('  app [filter]           Open a NodePort service in browser (local only)')
-    print('  dashboard [-t]         Open Headlamp dashboard (-t to generate new token)')
-    print()
-    print(f'{_BOLD}Options:{_NC}')
-    print('  -f                     Follow logs (used with logs)')
-    print('  --tail <lines>         Number of log lines to show (default 20, -1 for all)')
-    print('  -t                     Generate new token (used with dashboard)')
-    print('  -n <namespace>         Override saved namespace')
-    print('  -h, --help             Show this help')
+    b, n = _BOLD, _NC
+    print(dedent(f"""\
+        {b}{CMD}{n} — Kubernetes environment helper
+
+        {b}Usage:{n} {CMD} <command> [args] [-n namespace]
+
+        {b}Context:{n}
+          ctx                    Show saved contexts
+          ctx add                Add local k8s namespace as context
+          ctx add-remote [host]  Add remote k8s namespace via SSH
+          ctx set                Switch active context
+          ctx del                Delete a saved context
+          allow                  Trust .k8s-env in current directory
+          deny                   Remove trust for .k8s-env in current directory
+
+        {b}Inspection:{n}
+          pods [filter]          List pods (filter by name)
+          logs [filter]          Show pod logs (see logs --help)
+          services [filter]      List services
+          namespaces             List all namespaces
+          events [filter]        Show recent events
+          configmaps [filter]    List configmaps (interactive viewer)
+          secrets [filter]       List secret names
+          cronjobs [filter]      List cronjobs
+          status                 Show cluster and namespace stats
+          describe [resource]    Describe a resource (picker if omitted)
+
+        {b}Actions:{n}
+          exec [filter]          Open a shell in a pod (interactive picker)
+          restart [filter]       Restart deployments (interactive multi-picker)
+          port-forward [filter]  Forward a service port (local only)
+          app [filter]           Open a NodePort service in browser (local only)
+          dashboard              Open Headlamp dashboard (see dashboard --help)
+
+        {b}Options:{n}
+          -n <namespace>         Override saved namespace
+          -h, --help             Show this help"""))
+
+
+def _show_logs_help() -> None:
+    b, n = _BOLD, _NC
+    print(dedent(f"""\
+        {b}Usage:{n} {CMD} logs [filter] [-f] [--tail N]
+
+        Show log output for pods in the current namespace.
+
+        {b}Options:{n}
+          -f              Follow log output (streams one pod)
+          --tail <lines>  Number of lines to show (default 20, -1 for all)"""))
+
+
+def _show_dashboard_help() -> None:
+    b, n = _BOLD, _NC
+    print(dedent(f"""\
+        {b}Usage:{n} {CMD} dashboard [-t]
+
+        Open Headlamp dashboard in the browser.
+
+        {b}Options:{n}
+          -t  Generate a new access token (valid 1 year)"""))
 
 
 # -- Main ---------------------------------------------------------------------
 
 _COMMANDS = {
     # Context
-    'allow':        lambda ctx, _arg: cmd_allow(ctx),
-    'deny':         lambda ctx, _arg: cmd_deny(ctx),
+    'ctx':          lambda ctx, args:  cmd_ctx(ctx, args),
+    'allow':        lambda ctx, _args: cmd_allow(ctx),
+    'deny':         lambda ctx, _args: cmd_deny(ctx),
     # Inspection
-    'pods':         lambda ctx, arg:  cmd_pods(ctx, arg),
-    'logs':         lambda ctx, arg:  cmd_logs(ctx, arg),
-    'services':     lambda ctx, arg:  cmd_services(ctx, arg),
-    'svc':          lambda ctx, arg:  cmd_services(ctx, arg),
-    'namespaces':   lambda ctx, _arg: cmd_namespaces(ctx),
-    'ns':           lambda ctx, _arg: cmd_namespaces(ctx),
-    'events':       lambda ctx, arg:  cmd_events(ctx, arg),
-    'configmaps':   lambda ctx, arg:  cmd_configmaps(ctx, arg),
-    'cm':           lambda ctx, arg:  cmd_configmaps(ctx, arg),
-    'secrets':      lambda ctx, arg:  cmd_secrets(ctx, arg),
-    'cronjobs':     lambda ctx, arg:  cmd_cronjobs(ctx, arg),
-    'cj':           lambda ctx, arg:  cmd_cronjobs(ctx, arg),
-    'status':       lambda ctx, _arg: cmd_status(ctx),
-    'st':           lambda ctx, _arg: cmd_status(ctx),
-    'describe':     lambda ctx, arg:  cmd_describe(ctx, arg),
-    'desc':         lambda ctx, arg:  cmd_describe(ctx, arg),
+    'pods':         lambda ctx, args:  cmd_pods(ctx, first(args)),
+    'logs':         lambda ctx, args:  cmd_logs(ctx, args),
+    'services':     lambda ctx, args:  cmd_services(ctx, first(args)),
+    'svc':          lambda ctx, args:  cmd_services(ctx, first(args)),
+    'namespaces':   lambda ctx, _args: cmd_namespaces(ctx),
+    'ns':           lambda ctx, _args: cmd_namespaces(ctx),
+    'events':       lambda ctx, args:  cmd_events(ctx, first(args)),
+    'configmaps':   lambda ctx, args:  cmd_configmaps(ctx, first(args)),
+    'cm':           lambda ctx, args:  cmd_configmaps(ctx, first(args)),
+    'secrets':      lambda ctx, args:  cmd_secrets(ctx, first(args)),
+    'cronjobs':     lambda ctx, args:  cmd_cronjobs(ctx, first(args)),
+    'cj':           lambda ctx, args:  cmd_cronjobs(ctx, first(args)),
+    'status':       lambda ctx, _args: cmd_status(ctx),
+    'st':           lambda ctx, _args: cmd_status(ctx),
+    'describe':     lambda ctx, args:  cmd_describe(ctx, first(args)),
+    'desc':         lambda ctx, args:  cmd_describe(ctx, first(args)),
     # Actions
-    'exec':         lambda ctx, arg:  cmd_exec(ctx, arg),
-    'sh':           lambda ctx, arg:  cmd_exec(ctx, arg),
-    'restart':      lambda ctx, arg:  cmd_restart(ctx, arg),
-    'port-forward': lambda ctx, arg:  cmd_port_forward(ctx, arg),
-    'pf':           lambda ctx, arg:  cmd_port_forward(ctx, arg),
-    'app':          lambda ctx, arg:  cmd_app(ctx, arg),
-    'dashboard':    lambda ctx, _arg: cmd_dashboard(ctx),
+    'exec':         lambda ctx, args:  cmd_exec(ctx, first(args)),
+    'sh':           lambda ctx, args:  cmd_exec(ctx, first(args)),
+    'restart':      lambda ctx, args:  cmd_restart(ctx, first(args)),
+    'port-forward': lambda ctx, args:  cmd_port_forward(ctx, first(args)),
+    'pf':           lambda ctx, args:  cmd_port_forward(ctx, first(args)),
+    'app':          lambda ctx, args:  cmd_app(ctx, first(args)),
+    'dashboard':    lambda ctx, args:  cmd_dashboard(ctx, args),
 }
 
 
-def _parse_tail(value: str) -> int:
-    try:
-        tail = int(value)
-    except ValueError:
-        raise SystemExit(f'--tail requires an integer, got: {value}') from None
-    if tail == 0:
-        raise SystemExit('--tail must be a positive number or -1 for all lines')
-    return tail
+def main() -> None:
+    ns_override, positional = parse_args(sys.argv[1:], {'-n': ''})
 
-
-def _parse_args() -> tuple[list[str], str, bool, bool, int]:
-    ns_override = ''
-    follow = False
-    new_token = False
-    tail = 20
-    positional: list[str] = []
-    show_help_flag = False
-
-    args = sys.argv[1:]
-    i = 0
-    while i < len(args):
-        if args[i] == '-n' and i + 1 < len(args):
-            ns_override = args[i + 1]
-            i += 2
-        elif args[i] == '--tail' and i + 1 < len(args):
-            tail = _parse_tail(args[i + 1])
-            i += 2
-        elif args[i] == '--tail':
-            raise SystemExit('--tail requires a value')
-        elif args[i] == '-f':
-            follow = True
-            i += 1
-        elif args[i] == '-t':
-            new_token = True
-            i += 1
-        elif args[i] in ('-h', '--help'):
-            show_help_flag = True
-            i += 1
-        else:
-            positional.append(args[i])
-            i += 1
-
-    if show_help_flag or not positional:
+    # -h/--help not consumed by parse_args so they pass through to command handlers
+    if not positional or positional in (['-h'], ['--help']):
         show_help()
         sys.exit(0)
 
-    return positional, ns_override, follow, new_token, tail
-
-
-def main() -> None:
-    positional, ns_override, follow, new_token, tail = _parse_args()
     command = positional[0]
-    arg = positional[1] if len(positional) > 1 else ''
+    args = positional[1:]
 
-    ctx = AppContext(ns_override=ns_override, follow=follow, new_token=new_token, tail=tail)
+    ctx = AppContext(ns_override=ns_override)
     try:
-        if command == 'ctx':
-            extra = positional[2] if len(positional) > 2 else ''
-            cmd_ctx(ctx, arg, extra)
-        else:
-            handler = _COMMANDS.get(command)
-            if not handler:
-                print_error(f'Unknown command: {command}')
-                print()
-                show_help()
-                sys.exit(1)
-            handler(ctx, arg)
+        handler = _COMMANDS.get(command)
+        if not handler:
+            print_error(f'Unknown command: {command}')
+            print()
+            show_help()
+            sys.exit(1)
+        handler(ctx, args)
     except KeyboardInterrupt:
         print()
     except RuntimeError as e:

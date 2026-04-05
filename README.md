@@ -102,7 +102,7 @@ All inspection commands support an optional filter argument to narrow results by
 | Command | Description |
 |---|---|
 | `pods [filter]` | List pods |
-| `logs [filter] [-f]` | Show last 20 log lines per pod (`-f` to follow) |
+| `logs [filter] [-f] [--tail N]` | Show pod logs (`-f` to follow, `--tail N` lines, default 20) |
 | `services [filter]` | List services |
 | `namespaces` | List all namespaces |
 | `events [filter]` | Show recent events |
@@ -122,15 +122,12 @@ All inspection commands support an optional filter argument to narrow results by
 | `app [filter]` | Open a NodePort service in the browser |
 | `dashboard [-t]` | Open Headlamp dashboard (`-t` for new token) |
 
-### Options
+### Global options
 
 | Flag | Description |
 |---|---|
 | `-n <namespace>` | Override the saved namespace for this invocation |
-| `-f` | Follow logs (used with `logs`) |
-| `--tail <lines>` | Number of log lines to show (default 20, -1 for all) |
-| `-t` | Generate new token (used with `dashboard`) |
-| `-h, --help` | Show help |
+| `-h, --help` | Show help (also works per-command: `k8s logs --help`) |
 
 ## Supported runtimes
 
