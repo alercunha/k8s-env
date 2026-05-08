@@ -92,6 +92,7 @@ This prevents unexpected execution from modified config files. Remove trust with
 | `ctx add-remote [host]` | Add remote k8s namespace via SSH |
 | `ctx set` | Switch active context |
 | `ctx del` | Delete a saved context |
+| `ctx use` | Apply active context and namespace to kubectl config |
 | `allow` | Trust `.k8s-env` in current directory |
 | `deny` | Remove trust for `.k8s-env` |
 

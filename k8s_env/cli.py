@@ -206,12 +206,35 @@ def _ctx_del(ctx: AppContext) -> None:
         print_status(f'Switched to context {_BOLD}{new_active.name}{_NC}')
 
 
+def _ctx_use(ctx: AppContext) -> None:
+    env = ctx.env
+    if env.tool not in ('k8s', 'k8s-ssh'):
+        print_status(f'{env.tool} does not use kubectl contexts — nothing to do.')
+        return
+
+    context_name = env.context
+    ns = ctx.namespace
+    print('This will set your kubectl config to:')
+    print(f'  context:   {_BOLD}{context_name}{_NC}')
+    print(f'  namespace: {_BOLD}{ns}{_NC}')
+    raw = _input('\nProceed? [y/N]: ').strip().lower()
+    if raw != 'y':
+        raise SystemExit('Aborted')
+
+    subprocess.run(['kubectl', 'config', 'use-context', context_name], check=True)
+    subprocess.run(['kubectl', 'config', 'set-context', context_name,
+                     '--namespace', ns], check=True)
+    print()
+    print_status(f'kubectl now using context {_BOLD}{context_name}{_NC} / namespace {_BOLD}{ns}{_NC}')
+
+
 _CTX_COMMANDS = {
     '':           lambda ctx, _arg: _ctx_list(ctx),
     'add':        lambda ctx, _arg: _ctx_add(ctx),
     'add-remote': lambda ctx, arg:  _ctx_add_remote(ctx, arg),
     'set':        lambda ctx, _arg: _ctx_set(ctx),
     'del':        lambda ctx, _arg: _ctx_del(ctx),
+    'use':        lambda ctx, _arg: _ctx_use(ctx),
 }
 
 
@@ -220,7 +243,7 @@ def cmd_ctx(ctx: AppContext, args: list[str]) -> None:
     sub = first(args)
     handler = _CTX_COMMANDS.get(sub)
     if not handler:
-        raise SystemExit(f'Unknown ctx subcommand: {sub}. Use: add, add-remote, set, del')
+        raise SystemExit(f'Unknown ctx subcommand: {sub}. Use: add, add-remote, set, del, use')
     handler(ctx, first(args[1:]))
 
 
@@ -563,6 +586,7 @@ def show_help() -> None:
           ctx add-remote [host]  Add remote k8s namespace via SSH
           ctx set                Switch active context
           ctx del                Delete a saved context
+          ctx use                Apply active context to kubectl config
           allow                  Trust .k8s-env in current directory
           deny                   Remove trust for .k8s-env in current directory
 
