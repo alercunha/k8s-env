@@ -53,7 +53,23 @@ class Profiles:
     def multi(self) -> bool:
         return self._multi
 
+    def find_by_slug(self, slug: str) -> EnvEntry | None:
+        if not slug:
+            return None
+        for entry in self.list():
+            if entry.env.slug == slug:
+                return entry
+        return None
+
+    def _check_slug_unique(self, env: Env) -> None:
+        if not env.slug:
+            return
+        for entry in self.list():
+            if entry.name != env.profile_name and entry.env.slug == env.slug:
+                raise SystemExit(f'Slug already in use: {env.slug}')
+
     def save(self, env: Env) -> EnvEntry:
+        self._check_slug_unique(env)
         if not self._multi and self._active and self._active.name != env.profile_name:
             self._convert_to_multi()
         if self._multi:

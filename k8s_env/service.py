@@ -17,7 +17,7 @@ class Env:
     def __init__(
         self, tool: str, ssh_host: str = '', context: str = '',
         namespace: str = '', port_forwards: dict[str, str] | None = None,
-        content_hash: str = '',
+        content_hash: str = '', slug: str = '',
     ) -> None:
         self.tool = tool
         self.ssh_host = ssh_host
@@ -25,6 +25,7 @@ class Env:
         self.namespace = namespace
         self.port_forwards = port_forwards or {}
         self.content_hash = content_hash
+        self.slug = slug
 
     @classmethod
     def load(cls, path: str) -> Env:
@@ -53,6 +54,7 @@ class Env:
             namespace=fields.get('namespace', ''),
             port_forwards=port_forwards,
             content_hash=content_hash,
+            slug=fields.get('slug', ''),
         )
         env.validate()
         return env
@@ -65,6 +67,8 @@ class Env:
             validate('context', self.context)
         if self.ssh_host:
             validate('host', self.ssh_host)
+        if self.slug:
+            validate('slug', self.slug)
         for key, val in self.port_forwards.items():
             if not val.isdigit() or not 1 <= int(val) <= 65535:
                 raise ValueError(f"Invalid port forward value for {key}: '{val}'")
@@ -76,6 +80,7 @@ class Env:
             f.write(f'ssh_host={self.ssh_host}\n')
             f.write(f'context={self.context}\n')
             f.write(f'namespace={self.namespace}\n')
+            f.write(f'slug={self.slug}\n')
             for key, val in self.port_forwards.items():
                 f.write(f'{key}={val}\n')
 

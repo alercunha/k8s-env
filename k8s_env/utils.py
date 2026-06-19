@@ -18,6 +18,7 @@ _VALIDATORS = {
     'namespace': re.compile(r'^[a-z0-9][-a-z0-9]*[a-z0-9]?$'),
     'host':      re.compile(r'^[A-Za-z0-9._@:-]+$'),
     'profile':   re.compile(r'^[a-z0-9][-a-z0-9]*$'),
+    'slug':      re.compile(r'^[a-z0-9][-a-z0-9]*$'),
 }
 
 

@@ -11,7 +11,7 @@ from k8s_env.context import AppContext
 from k8s_env.profile import EnvEntry
 from k8s_env.service import Env
 from k8s_env.trust import trust, untrust
-from k8s_env.utils import CMD
+from k8s_env.utils import CMD, validate
 
 # -- Colors -------------------------------------------------------------------
 
@@ -141,7 +141,34 @@ def _ctx_list(ctx: AppContext) -> None:
         print(_format_entry(e, active))
 
 
-def _ctx_add(ctx: AppContext) -> None:
+def _parse_slug_flag(args: list[str]) -> tuple[str, list[str]]:
+    return parse_args(args, {('-s', '--slug'): ''})
+
+
+def _validate_slug(slug: str) -> str:
+    if slug:
+        try:
+            validate('slug', slug)
+        except ValueError as e:
+            raise SystemExit(str(e)) from None
+    return slug
+
+
+def _ensure_slug(slug: str) -> str:
+    if not slug:
+        slug = _input('Slug (optional, enter to skip): ').strip()
+    return _validate_slug(slug)
+
+
+def _resolve_slug(ctx: AppContext, slug: str) -> EnvEntry:
+    entry = ctx.profiles.find_by_slug(slug)
+    if not entry:
+        raise SystemExit(f'No context with slug: {slug}')
+    return entry
+
+
+def _ctx_add(ctx: AppContext, args: list[str]) -> None:
+    slug_flag, _ = _parse_slug_flag(args)
     entries = service.discover_local()
     if not entries:
         raise SystemExit('No namespaces found (checked microk8s, minikube, and kubectl contexts)')
@@ -150,13 +177,16 @@ def _ctx_add(ctx: AppContext) -> None:
     groups = [e.group for e in entries]
     selected = entries[pick('Available namespaces', labels, groups=groups)[0][0]]
 
-    env = Env(tool=selected.tool, context=selected.context, namespace=selected.namespace)
+    slug = _ensure_slug(slug_flag)
+    env = Env(tool=selected.tool, context=selected.context, namespace=selected.namespace, slug=slug)
     ctx.profiles.save(env)
     print()
     print_status(f'Set to {_BOLD}{selected.group}{_NC} namespace: {_BOLD}{selected.namespace}{_NC}')
 
 
-def _ctx_add_remote(ctx: AppContext, host: str) -> None:
+def _ctx_add_remote(ctx: AppContext, args: list[str]) -> None:
+    slug_flag, rest = _parse_slug_flag(args)
+    host = first(rest)
     if not host:
         host = _input('Remote host: ').strip()
         if not host:
@@ -170,35 +200,45 @@ def _ctx_add_remote(ctx: AppContext, host: str) -> None:
     groups = [e.tool for e in entries]
     selected = entries[pick(f'Namespaces on {host}', labels, groups=groups)[0][0]]
 
-    env = Env(tool=selected.tool, ssh_host=host, namespace=selected.namespace)
+    slug = _ensure_slug(slug_flag)
+    env = Env(tool=selected.tool, ssh_host=host, namespace=selected.namespace, slug=slug)
     ctx.profiles.save(env)
     print()
     ns = selected.namespace
     print_status(f'Set to {_YELLOW}{selected.tool} ssh{_NC} host: {_BOLD}{host}{_NC} namespace: {_BOLD}{ns}{_NC}')
 
 
-def _ctx_set(ctx: AppContext) -> None:
+def _ctx_set(ctx: AppContext, slug: str) -> None:
     entries = ctx.profiles.list()
     if not entries:
         raise SystemExit(f'No contexts saved. Run: {CMD} ctx add')
-    if len(entries) == 1:
+    active = ctx.profiles.active_name
+    if slug:
+        selected = _resolve_slug(ctx, slug)
+        if selected.name == active:
+            print_status(f'Already on context {_BOLD}{selected.name}{_NC}')
+            return
+    elif len(entries) == 1:
         print_status(f'Already on the only context: {_BOLD}{entries[0].name}{_NC}')
         return
-    active = ctx.profiles.active_name
-    items = [_format_entry(e, active) for e in entries]
-    selected = entries[pick('Activate context', items)[0][0]]
+    else:
+        items = [_format_entry(e, active) for e in entries]
+        selected = entries[pick('Activate context', items)[0][0]]
     ctx.profiles.activate(selected.name)
     print()
     print_status(f'Activated context {_BOLD}{selected.name}{_NC}')
 
 
-def _ctx_del(ctx: AppContext) -> None:
+def _ctx_del(ctx: AppContext, slug: str) -> None:
     entries = ctx.profiles.list()
     if not entries:
         raise SystemExit('No contexts saved')
-    active = ctx.profiles.active_name
-    items = [_format_entry(e, active) for e in entries]
-    selected = entries[pick('Delete context', items)[0][0]]
+    if slug:
+        selected = _resolve_slug(ctx, slug)
+    else:
+        active = ctx.profiles.active_name
+        items = [_format_entry(e, active) for e in entries]
+        selected = entries[pick('Delete context', items)[0][0]]
     new_active = ctx.profiles.delete(selected.name)
     print()
     print_status(f'Deleted context {_BOLD}{selected.name}{_NC}')
@@ -206,7 +246,11 @@ def _ctx_del(ctx: AppContext) -> None:
         print_status(f'Switched to context {_BOLD}{new_active.name}{_NC}')
 
 
-def _ctx_use(ctx: AppContext) -> None:
+def _ctx_use(ctx: AppContext, slug: str) -> None:
+    if slug:
+        selected = _resolve_slug(ctx, slug)
+        if selected.name != ctx.profiles.active_name:
+            ctx.profiles.activate(selected.name)
     env = ctx.env
     if env.tool not in ('k8s', 'k8s-ssh'):
         print_status(f'{env.tool} does not use kubectl contexts — nothing to do.')
@@ -228,13 +272,29 @@ def _ctx_use(ctx: AppContext) -> None:
     print_status(f'kubectl now using context {_BOLD}{context_name}{_NC} / namespace {_BOLD}{ns}{_NC}')
 
 
+def _ctx_slug(ctx: AppContext, slug: str) -> None:
+    env = ctx.env
+    name = ctx.profiles.active_name
+    if not slug:
+        current = f' (current: {env.slug})' if env.slug else ''
+        slug = _input(f'Slug for {name}{current}, enter to clear: ').strip()
+    env.slug = _validate_slug(slug)
+    ctx.profiles.save(env)
+    print()
+    if env.slug:
+        print_status(f'Set slug {_BOLD}{env.slug}{_NC} on {_BOLD}{name}{_NC}')
+    else:
+        print_status(f'Cleared slug on {_BOLD}{name}{_NC}')
+
+
 _CTX_COMMANDS = {
-    '':           lambda ctx, _arg: _ctx_list(ctx),
-    'add':        lambda ctx, _arg: _ctx_add(ctx),
-    'add-remote': lambda ctx, arg:  _ctx_add_remote(ctx, arg),
-    'set':        lambda ctx, _arg: _ctx_set(ctx),
-    'del':        lambda ctx, _arg: _ctx_del(ctx),
-    'use':        lambda ctx, _arg: _ctx_use(ctx),
+    '':           lambda ctx, _args: _ctx_list(ctx),
+    'add':        lambda ctx, args:  _ctx_add(ctx, args),
+    'add-remote': lambda ctx, args:  _ctx_add_remote(ctx, args),
+    'set':        lambda ctx, args:  _ctx_set(ctx, first(args)),
+    'del':        lambda ctx, args:  _ctx_del(ctx, first(args)),
+    'use':        lambda ctx, args:  _ctx_use(ctx, first(args)),
+    'slug':       lambda ctx, args:  _ctx_slug(ctx, first(args)),
 }
 
 
@@ -243,16 +303,17 @@ def cmd_ctx(ctx: AppContext, args: list[str]) -> None:
     sub = first(args)
     handler = _CTX_COMMANDS.get(sub)
     if not handler:
-        raise SystemExit(f'Unknown ctx subcommand: {sub}. Use: add, add-remote, set, del, use')
-    handler(ctx, first(args[1:]))
+        raise SystemExit(f'Unknown ctx subcommand: {sub}. Use: add, add-remote, set, del, use, slug')
+    handler(ctx, args[1:])
 
 
 def _format_entry(e: EnvEntry, active: str) -> str:
     env = e.env
     location = env.ssh_host or env.context or 'local'
+    slug = f' ({env.slug})' if env.slug else ''
     if e.name == active:
-        return f'{_GREEN}[{e.name}]{_NC} {env.tool} on {location} / {env.namespace} {_GREEN}(active){_NC}'
-    return f'{_DIM}[{e.name}] {env.tool} on {location} / {env.namespace}{_NC}'
+        return f'{_GREEN}[{e.name}]{slug}{_NC} {env.tool} on {location} / {env.namespace} {_GREEN}(active){_NC}'
+    return f'{_DIM}[{e.name}]{slug} {env.tool} on {location} / {env.namespace}{_NC}'
 
 
 # -- Other commands -----------------------------------------------------------
@@ -582,11 +643,12 @@ def show_help() -> None:
 
         {b}Context:{n}
           ctx                    Show saved contexts
-          ctx add                Add local k8s namespace as context
-          ctx add-remote [host]  Add remote k8s namespace via SSH
-          ctx set                Switch active context
-          ctx del                Delete a saved context
-          ctx use                Apply active context to kubectl config
+          ctx add [-s slug]      Add local k8s namespace as context
+          ctx add-remote [host] [-s slug]  Add remote k8s namespace via SSH
+          ctx set [slug]         Switch active context (by slug, or picker)
+          ctx del [slug]         Delete a saved context (by slug, or picker)
+          ctx use [slug]         Apply context to kubectl config (by slug, or active)
+          ctx slug [slug]        Set/clear the slug on the active context
           allow                  Trust .k8s-env in current directory
           deny                   Remove trust for .k8s-env in current directory
 
