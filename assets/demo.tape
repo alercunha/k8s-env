@@ -30,7 +30,7 @@ Type "clear"  Enter
 Show
 Sleep 500ms
 
-# --- 1) add a context: pick a namespace, give it a slug ---------------------
+# --- 1) add a context: pick a namespace, give it an alias -------------------
 Type `k8s ctx add  # scan all clusters, pick a namespace, pin it as a context`  Sleep 1.5s  Enter
 Sleep 3s
 Type "2"                    Sleep 400ms  Enter
