@@ -4,6 +4,8 @@ Interactive CLI for managing Kubernetes environments across microk8s, minikube, 
 
 Pure Python 3 — no dependencies beyond the standard library.
 
+![k8s-env demo](assets/demo.gif)
+
 ## Prerequisites
 
 - Python 3.10+
