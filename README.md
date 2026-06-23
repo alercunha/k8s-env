@@ -73,10 +73,10 @@ k8s ctx
 
 Adding a second context automatically converts to multi-profile mode (`.k8s-env/` directory). Switch between contexts with `k8s ctx set`.
 
-Give a context a unique slug to skip the interactive picker:
+Give a context a unique alias to skip the interactive picker:
 
 ```
-k8s ctx add -s prod
+k8s ctx add -a prod
 k8s ctx set prod
 k8s ctx use prod
 ```
@@ -98,12 +98,12 @@ This prevents unexpected execution from modified config files. Remove trust with
 | Command | Description |
 |---|---|
 | `ctx` | Show saved contexts |
-| `ctx add [-s slug]` | Add local k8s namespace as context |
-| `ctx add-remote [host] [-s slug]` | Add remote k8s namespace via SSH |
-| `ctx set [slug]` | Switch active context (by slug, or interactive picker) |
-| `ctx del [slug]` | Delete a saved context (by slug, or interactive picker) |
-| `ctx use [slug]` | Apply a context to kubectl config (by slug, or the active one) |
-| `ctx slug [slug]` | Set, change, or clear the slug on the active context |
+| `ctx add [-a alias]` | Add local k8s namespace as context |
+| `ctx add-remote [host] [-a alias]` | Add remote k8s namespace via SSH |
+| `ctx set [alias]` | Switch active context (by alias, or interactive picker) |
+| `ctx del [alias]` | Delete a saved context (by alias, or interactive picker) |
+| `ctx use [alias]` | Apply a context to kubectl config (by alias, or the active one) |
+| `ctx alias [alias]` | Set, change, or clear the alias on the active context |
 | `allow` | Trust `.k8s-env` in current directory |
 | `deny` | Remove trust for `.k8s-env` |
 
