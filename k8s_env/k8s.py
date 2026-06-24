@@ -103,8 +103,13 @@ class KubeCtl(ABC):
         self.stream('logs', '-f', self._tail_arg(tail), pod, '-n', namespace)
 
     def exec_shell(self, pod: str, namespace: str) -> None:
-        # Interactive shell into a pod — needs TTY
-        self.stream_tty('exec', '-it', pod, '-n', namespace, '--', '/bin/sh')
+        # Interactive shell into a pod — needs TTY.
+        # Prefer bash, fall back to sh. The fallback runs inside the container
+        # because os.execvp replaces this process and can't retry.
+        self.stream_tty(
+            'exec', '-it', pod, '-n', namespace, '--',
+            '/bin/sh', '-c', 'command -v bash >/dev/null 2>&1 && exec bash || exec sh',
+        )
 
     def stream_tty(self, *args: str) -> None:
         # Replace process entirely so kubectl gets direct terminal control
