@@ -47,7 +47,7 @@ pyproject.toml       # Project metadata, pylint configuration
 - `k8s.get()` is a cached factory — returns the right KubeCtl subclass based on tool/context/host.
 - Discovery (`service.py`) runs namespace probes in parallel via `ThreadPoolExecutor` with a 10-second timeout per probe.
 - Profiles support single-file mode (`.k8s-env` file) and multi-profile mode (`.k8s-env/profiles/` directory with `active` symlink). Auto-converts to multi-profile on second `ctx add`.
-- Each context may have an optional `alias` (stored in the `.k8s-env` file). Aliases must be unique — `Profiles.save` rejects clashes. `ctx set`/`del`/`use` accept an alias argument to skip the interactive picker (`ctx add`/`add-remote` take `-a/--alias`, prompting when absent). `ctx alias` sets, changes, or clears the alias on the active context in place.
+- Each context may have an optional `alias` (stored in the `.k8s-env` file). Aliases must be unique — `Profiles.save` rejects clashes. `ctx set`/`del`/`use` accept an alias argument to skip the interactive picker. The alias is positional everywhere — `ctx add [alias]` and `ctx add-remote [host] [alias]` — and is prompted when absent. `ctx alias` sets, changes, or clears the alias on the active context in place. `cmd_ctx` intercepts `-h/--help` (via `handle_help`) and shows the top-level help before the trust check, so `ctx … --help` works in untrusted directories.
 - Errors use `SystemExit` for user-facing messages and `RuntimeError` for kubectl/SSH failures.
 - ANSI color constants are defined in cli.py (`_RED`, `_GREEN`, `_YELLOW`, `_CYAN`, `_BOLD`, `_DIM`, `_NC`).
 

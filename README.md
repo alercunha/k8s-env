@@ -76,7 +76,7 @@ Adding a second context automatically converts to multi-profile mode (`.k8s-env/
 Give a context a unique alias to skip the interactive picker:
 
 ```
-k8s ctx add -a prod
+k8s ctx add prod
 k8s ctx set prod
 k8s ctx use prod
 ```
@@ -98,8 +98,8 @@ This prevents unexpected execution from modified config files. Remove trust with
 | Command | Description |
 |---|---|
 | `ctx` | Show saved contexts |
-| `ctx add [-a alias]` | Add local k8s namespace as context |
-| `ctx add-remote [host] [-a alias]` | Add remote k8s namespace via SSH |
+| `ctx add [alias]` | Add local k8s namespace as context |
+| `ctx add-remote [host] [alias]` | Add remote k8s namespace via SSH |
 | `ctx set [alias]` | Switch active context (by alias, or interactive picker) |
 | `ctx del [alias]` | Delete a saved context (by alias, or interactive picker) |
 | `ctx use [alias]` | Apply a context to kubectl config (by alias, or the active one) |
