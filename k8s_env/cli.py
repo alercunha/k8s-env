@@ -332,8 +332,6 @@ def cmd_events(ctx: AppContext, filter_text: str) -> None:
 
 
 def cmd_logs(ctx: AppContext, args: list[str]) -> None:
-    if handle_help(args, _show_logs_help):
-        return
     follow, tail, rest = parse_args(args, {'-f': False, '--tail': 20})
     if tail == 0:
         raise SystemExit('--tail must be a positive number or -1 for all lines')
@@ -494,8 +492,6 @@ def cmd_app(ctx: AppContext, filter_text: str = '') -> None:
 
 
 def cmd_dashboard(ctx: AppContext, args: list[str]) -> None:
-    if handle_help(args, _show_dashboard_help):
-        return
     new_token, _ = parse_args(args, {'-t': False})
 
     if ctx.kubectl.ssh_host:
@@ -639,6 +635,13 @@ def _show_dashboard_help() -> None:
 
 # -- Main ---------------------------------------------------------------------
 
+# Commands with their own flags get a dedicated --help page; every other
+# command falls back to the show_help() overview (see main).
+_HELP = {
+    'logs':      _show_logs_help,
+    'dashboard': _show_dashboard_help,
+}
+
 _COMMANDS = {
     # Context
     'ctx':          lambda ctx, args:  cmd_ctx(ctx, args),
@@ -675,13 +678,18 @@ _COMMANDS = {
 def main() -> None:
     ns_override, positional = parse_args(sys.argv[1:], {'-n': ''})
 
-    # -h/--help not consumed by parse_args so they pass through to command handlers
-    if not positional or positional in (['-h'], ['--help']):
+    if not positional:
         show_help()
         sys.exit(0)
 
     command = positional[0]
     args = positional[1:]
+
+    # Single place -h/--help is handled: any command (or a bare flag) prints
+    # help and exits. Commands with their own flags get a dedicated page; the
+    # rest get the overview.
+    if handle_help(positional, _HELP.get(command, show_help)):
+        sys.exit(0)
 
     ctx = AppContext(ns_override=ns_override)
     try:
