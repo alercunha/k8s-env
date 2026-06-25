@@ -42,5 +42,6 @@ pyproject.toml       # Project metadata, pylint configuration
 - `k8s.get()` is a cached factory — returns the right KubeCtl subclass based on tool/context/host.
 - Discovery (`service.py`) runs namespace probes in parallel via `ThreadPoolExecutor` with a 10-second timeout per probe.
 - Profiles support single-file mode (`.k8s-env` file) and multi-profile mode (`.k8s-env/profiles/` directory with `active` symlink). Auto-converts to multi-profile on second `ctx add`.
+- `-h/--help` is handled in one place — `main()` intercepts it for any command and renders help from the `_COMMANDS_META` table (cli.py). Both the `show_help()` overview and every per-command page are generated from that table, so they cannot drift. Aliases (`svc`, `ns`, `cm`, etc.) resolve to their primary entry; unknown commands fall back to the overview. Command handlers do not handle `--help` themselves.
 - Errors use `SystemExit` for user-facing messages and `RuntimeError` for kubectl/SSH failures.
 - ANSI color constants are defined in cli.py (`_RED`, `_GREEN`, `_YELLOW`, `_CYAN`, `_BOLD`, `_DIM`, `_NC`).
