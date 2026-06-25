@@ -20,6 +20,7 @@ disable = [
     "missing-class-docstring",
     "missing-function-docstring",
     "too-many-public-methods",
+    "too-many-instance-attributes",
     "too-many-arguments",
     "too-many-positional-arguments",
     "unnecessary-lambda",

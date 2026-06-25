@@ -27,15 +27,17 @@ _NC = '\033[0m'
 def _input(prompt: str) -> str:
     if not sys.stdin.isatty():
         raise SystemExit('This command requires an interactive terminal.')
-    return input(prompt)
+    # Prompt to stderr so stdout stays clean for piping command output
+    print(prompt, end='', file=sys.stderr, flush=True)
+    return input()
 
 
 def print_status(msg: str) -> None:
-    print(f'{_GREEN}[INFO]{_NC} {msg}')
+    print(f'{_GREEN}[INFO]{_NC} {msg}', file=sys.stderr)
 
 
 def print_warning(msg: str) -> None:
-    print(f'{_YELLOW}[WARN]{_NC} {msg}')
+    print(f'{_YELLOW}[WARN]{_NC} {msg}', file=sys.stderr)
 
 
 def print_error(msg: str) -> None:
@@ -55,11 +57,12 @@ def print_banner(ctx: AppContext) -> None:
     name = k.tool_name
     ns = ctx.namespace
     if k.ssh_host:
-        print(f'{_YELLOW}[{name} ssh]{_NC} host: {_BOLD}{k.ssh_host}{_NC} | namespace: {_BOLD}{ns}{_NC}')
+        line = f'{_YELLOW}[{name} ssh]{_NC} host: {_BOLD}{k.ssh_host}{_NC} | namespace: {_BOLD}{ns}{_NC}'
     elif k.context:
-        print(f'{_CYAN}[{name} remote]{_NC} context: {_BOLD}{k.context}{_NC} | namespace: {_BOLD}{ns}{_NC}')
+        line = f'{_CYAN}[{name} remote]{_NC} context: {_BOLD}{k.context}{_NC} | namespace: {_BOLD}{ns}{_NC}'
     else:
-        print(f'{_YELLOW}[{name} local]{_NC} namespace: {_BOLD}{ns}{_NC}')
+        line = f'{_YELLOW}[{name} local]{_NC} namespace: {_BOLD}{ns}{_NC}'
+    print(line, file=sys.stderr)
 
 
 def _filter(items: list, text: str, key=lambda x: x) -> list:
@@ -91,21 +94,22 @@ def pick(
 
     # Skip prompt when only one option and auto is enabled
     if auto and len(items) == 1:
-        print(f'{_BOLD}{title}:{_NC} {items[0]}')
+        print(f'{_BOLD}{title}:{_NC} {items[0]}', file=sys.stderr)
         return [(0, items[0])]
 
-    # Display items, optionally grouped by adjacent group names
-    print(f'{_BOLD}{title}:{_NC}')
+    # Display items, optionally grouped by adjacent group names (to stderr so
+    # stdout stays clean for piping)
+    print(f'{_BOLD}{title}:{_NC}', file=sys.stderr)
     current_group = ''
     indent = '    ' if groups else '  '
     for i, item in enumerate(items):
         if groups and groups[i] != current_group:
             if current_group:
-                print()
+                print(file=sys.stderr)
             current_group = groups[i]
-            print(f'  {_YELLOW}{current_group}{_NC}')
-        print(f'{indent}{_CYAN}{i + 1}){_NC} {item}')
-    print()
+            print(f'  {_YELLOW}{current_group}{_NC}', file=sys.stderr)
+        print(f'{indent}{_CYAN}{i + 1}){_NC} {item}', file=sys.stderr)
+    print(file=sys.stderr)
 
     if multi:
         raw = _input(f'Select [1-{len(items)}, comma-separated or \'all\']: ')
@@ -386,7 +390,14 @@ def cmd_configmaps(ctx: AppContext, filter_text: str = '') -> None:
     print(ctx.kubectl.get_configmap_yaml(cms[int(raw) - 1], ns), end='')
 
 
-def cmd_exec(ctx: AppContext, filter_text: str) -> None:
+def cmd_exec(ctx: AppContext, args: list[str]) -> None:
+    # Everything after '--' is a command to run in the pod; without it, open a shell
+    if '--' in args:
+        sep = args.index('--')
+        filter_text, command = first(args[:sep]), args[sep + 1:]
+    else:
+        filter_text, command = first(args), []
+
     print_banner(ctx)
     ns = ctx.namespace
     k = ctx.kubectl
@@ -399,8 +410,12 @@ def cmd_exec(ctx: AppContext, filter_text: str) -> None:
         return
 
     selected = pick(f'Pods in {ns}', pods, auto=True)[0][1]
-    print_status(f'Connecting to {_BOLD}{selected}{_NC}...')
-    k.exec_shell(selected, ns)
+    if command:
+        print_status(f'Running in {_BOLD}{selected}{_NC}...')
+        k.exec_command(selected, ns, command)
+    else:
+        print_status(f'Connecting to {_BOLD}{selected}{_NC}...')
+        k.exec_shell(selected, ns)
 
 
 def _pick_service(pairs: list[tuple[str, str]], title: str, port_label: str) -> tuple[str, str]:
@@ -577,6 +592,7 @@ class _Cmd:
     usage: str = ''                                 # full usage line (overrides name+args)
     options: tuple[tuple[str, str], ...] = ()       # (flag, description) pairs
     aliases: tuple[str, ...] = ()                   # short forms
+    forms: tuple[tuple[str, str], ...] = ()         # extra invocation forms (label, summary)
     subcommands: tuple[tuple[str, str], ...] = ()   # (usage, summary) — ctx only
 
 
@@ -611,7 +627,10 @@ _COMMANDS_META = {
     'status':     _Cmd('Inspection', 'Show cluster and namespace stats', aliases=('st',)),
     'describe':   _Cmd('Inspection', 'Describe a resource (picker if omitted)', args='[resource]', aliases=('desc',)),
     # Actions
-    'exec':         _Cmd('Actions', 'Open a shell in a pod (interactive picker)', args='[filter]', aliases=('sh',)),
+    'exec':         _Cmd('Actions', 'Open a shell in a pod (interactive picker)', args='[filter]',
+                         usage='exec [filter] [-- cmd]', aliases=('sh',), forms=(
+                             ('exec [filter] -- cmd', 'Run a command in a pod and return'),
+                         )),
     'restart':      _Cmd('Actions', 'Restart deployments (interactive multi-picker)', args='[filter]'),
     'port-forward': _Cmd('Actions', 'Forward a service port (local only)', args='[filter]', aliases=('pf',)),
     'app':          _Cmd('Actions', 'Open a NodePort service in browser (local only)', args='[filter]'),
@@ -635,6 +654,7 @@ def _rows() -> list[tuple[str, str, str]]:
             rows += [(c.group, usage, summary) for usage, summary in c.subcommands]
         else:
             rows.append((c.group, _label(name, c), c.summary))
+            rows += [(c.group, label, summary) for label, summary in c.forms]
     return rows
 
 
@@ -715,8 +735,8 @@ _COMMANDS = {
     'describe':     lambda ctx, args:  cmd_describe(ctx, first(args)),
     'desc':         lambda ctx, args:  cmd_describe(ctx, first(args)),
     # Actions
-    'exec':         lambda ctx, args:  cmd_exec(ctx, first(args)),
-    'sh':           lambda ctx, args:  cmd_exec(ctx, first(args)),
+    'exec':         lambda ctx, args:  cmd_exec(ctx, args),
+    'sh':           lambda ctx, args:  cmd_exec(ctx, args),
     'restart':      lambda ctx, args:  cmd_restart(ctx, first(args)),
     'port-forward': lambda ctx, args:  cmd_port_forward(ctx, first(args)),
     'pf':           lambda ctx, args:  cmd_port_forward(ctx, first(args)),
@@ -731,14 +751,20 @@ assert set(_COMMANDS) == set(_COMMANDS_META) | set(_ALIASES), \
 
 
 def main() -> None:
-    ns_override, positional = parse_args(sys.argv[1:], {'-n': ''})
+    # Everything after the first '--' is an opaque command (e.g. for exec) and must
+    # not be scanned for our own flags like -n (think `exec api -- tail -n 100`).
+    argv = sys.argv[1:]
+    sep = argv.index('--') if '--' in argv else -1
+    head, passthrough = (argv[:sep], argv[sep:]) if sep >= 0 else (argv, [])
+
+    ns_override, positional = parse_args(head, {'-n': ''})
 
     if not positional:
         show_help()
         sys.exit(0)
 
     command = positional[0]
-    args = positional[1:]
+    args = positional[1:] + passthrough
 
     # Single place -h/--help is handled: any command (or a bare flag) prints
     # help and exits. Each command gets a page rendered from _COMMANDS_META;
