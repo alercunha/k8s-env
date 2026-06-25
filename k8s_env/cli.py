@@ -3,7 +3,7 @@ from __future__ import annotations
 import shutil
 import subprocess
 import sys
-from textwrap import dedent
+from dataclasses import dataclass
 
 from k8s_env import service
 from k8s_env.args import first, handle_help, parse_args
@@ -569,78 +569,128 @@ def cmd_status(ctx: AppContext) -> None:
 
 # -- Help ---------------------------------------------------------------------
 
+@dataclass(frozen=True)
+class _Cmd:
+    group: str
+    summary: str
+    args: str = ''                                  # positional signature for the overview
+    usage: str = ''                                 # full usage line (overrides name+args)
+    options: tuple[tuple[str, str], ...] = ()       # (flag, description) pairs
+    aliases: tuple[str, ...] = ()                   # short forms
+    subcommands: tuple[tuple[str, str], ...] = ()   # (usage, summary) — ctx only
+
+
+_GROUPS = ('Context', 'Inspection', 'Actions')
+
+# Single source of truth for both the overview (show_help) and per-command help.
+_COMMANDS_META = {
+    # Context
+    'ctx': _Cmd('Context', 'Manage saved contexts (shows them with no subcommand)', subcommands=(
+        ('ctx',                   'Show saved contexts'),
+        ('ctx add',               'Add local k8s namespace as context'),
+        ('ctx add-remote [host]', 'Add remote k8s namespace via SSH'),
+        ('ctx set',               'Switch active context'),
+        ('ctx del',               'Delete a saved context'),
+        ('ctx use',               'Apply active context to kubectl config'),
+    )),
+    'allow': _Cmd('Context', 'Trust .k8s-env in current directory'),
+    'deny':  _Cmd('Context', 'Remove trust for .k8s-env in current directory'),
+    # Inspection
+    'pods':       _Cmd('Inspection', 'List pods (filter by name)', args='[filter]'),
+    'logs':       _Cmd('Inspection', 'Show log output for pods in the current namespace',
+                       args='[filter]', usage='logs [filter] [-f] [--tail N]', options=(
+                           ('-f',             'Follow log output (streams one pod)'),
+                           ('--tail <lines>', 'Number of lines to show (default 20, -1 for all)'),
+                       )),
+    'services':   _Cmd('Inspection', 'List services', args='[filter]', aliases=('svc',)),
+    'namespaces': _Cmd('Inspection', 'List all namespaces', aliases=('ns',)),
+    'events':     _Cmd('Inspection', 'Show recent events', args='[filter]'),
+    'configmaps': _Cmd('Inspection', 'List configmaps (interactive viewer)', args='[filter]', aliases=('cm',)),
+    'secrets':    _Cmd('Inspection', 'List secret names', args='[filter]'),
+    'cronjobs':   _Cmd('Inspection', 'List cronjobs', args='[filter]', aliases=('cj',)),
+    'status':     _Cmd('Inspection', 'Show cluster and namespace stats', aliases=('st',)),
+    'describe':   _Cmd('Inspection', 'Describe a resource (picker if omitted)', args='[resource]', aliases=('desc',)),
+    # Actions
+    'exec':         _Cmd('Actions', 'Open a shell in a pod (interactive picker)', args='[filter]', aliases=('sh',)),
+    'restart':      _Cmd('Actions', 'Restart deployments (interactive multi-picker)', args='[filter]'),
+    'port-forward': _Cmd('Actions', 'Forward a service port (local only)', args='[filter]', aliases=('pf',)),
+    'app':          _Cmd('Actions', 'Open a NodePort service in browser (local only)', args='[filter]'),
+    'dashboard':    _Cmd('Actions', 'Open Headlamp dashboard in the browser', usage='dashboard [-t]', options=(
+        ('-t', 'Generate a new access token (valid 1 year)'),
+    )),
+}
+
+_ALIASES = {alias: name for name, c in _COMMANDS_META.items() for alias in c.aliases}
+
+
+def _label(name: str, c: _Cmd) -> str:
+    return f'{name} {c.args}'.strip()
+
+
+def _rows() -> list[tuple[str, str, str]]:
+    # Flatten the table into (group, label, summary) rows; ctx expands to its subcommands.
+    rows: list[tuple[str, str, str]] = []
+    for name, c in _COMMANDS_META.items():
+        if c.subcommands:
+            rows += [(c.group, usage, summary) for usage, summary in c.subcommands]
+        else:
+            rows.append((c.group, _label(name, c), c.summary))
+    return rows
+
+
+def _aligned(pairs: list[tuple[str, str]], indent: str = '  ') -> list[str]:
+    width = max(len(left) for left, _ in pairs) + 2
+    return [f'{indent}{left.ljust(width)}{right}' for left, right in pairs]
+
+
 def show_help() -> None:
     b, n = _BOLD, _NC
-    print(dedent(f"""\
-        {b}{CMD}{n} — Kubernetes environment helper
-
-        {b}Usage:{n} {CMD} <command> [args] [-n namespace]
-
-        {b}Context:{n}
-          ctx                    Show saved contexts
-          ctx add                Add local k8s namespace as context
-          ctx add-remote [host]  Add remote k8s namespace via SSH
-          ctx set                Switch active context
-          ctx del                Delete a saved context
-          ctx use                Apply active context to kubectl config
-          allow                  Trust .k8s-env in current directory
-          deny                   Remove trust for .k8s-env in current directory
-
-        {b}Inspection:{n}
-          pods [filter]          List pods (filter by name)
-          logs [filter]          Show pod logs (see logs --help)
-          services [filter]      List services
-          namespaces             List all namespaces
-          events [filter]        Show recent events
-          configmaps [filter]    List configmaps (interactive viewer)
-          secrets [filter]       List secret names
-          cronjobs [filter]      List cronjobs
-          status                 Show cluster and namespace stats
-          describe [resource]    Describe a resource (picker if omitted)
-
-        {b}Actions:{n}
-          exec [filter]          Open a shell in a pod (interactive picker)
-          restart [filter]       Restart deployments (interactive multi-picker)
-          port-forward [filter]  Forward a service port (local only)
-          app [filter]           Open a NodePort service in browser (local only)
-          dashboard              Open Headlamp dashboard (see dashboard --help)
-
-        {b}Options:{n}
-          -n <namespace>         Override saved namespace
-          -h, --help             Show this help"""))
+    rows = _rows()
+    lines = [
+        f'{b}{CMD}{n} — Kubernetes environment helper',
+        '',
+        f'{b}Usage:{n} {CMD} <command> [args] [-n namespace]',
+        '',
+    ]
+    width = max(len(label) for _, label, _ in rows) + 2
+    for group in _GROUPS:
+        lines.append(f'{b}{group}:{n}')
+        lines += [f'  {label.ljust(width)}{summary}'
+                  for g, label, summary in rows if g == group]
+        lines.append('')
+    lines.append(f'{b}Options:{n}')
+    lines += [f'  {left.ljust(width)}{right}' for left, right in (
+        ('-n <namespace>', 'Override saved namespace'),
+        ('-h, --help', 'Show this help'),
+    )]
+    print('\n'.join(lines))
 
 
-def _show_logs_help() -> None:
+def _command_help(name: str) -> None:
     b, n = _BOLD, _NC
-    print(dedent(f"""\
-        {b}Usage:{n} {CMD} logs [filter] [-f] [--tail N]
+    c = _COMMANDS_META[name]
+    if c.subcommands:
+        lines = [f'{b}Usage:{n} {CMD} {name} [subcommand]', '', c.summary,
+                 '', f'{b}Subcommands:{n}', *_aligned(list(c.subcommands))]
+        print('\n'.join(lines))
+        return
+    lines = [f'{b}Usage:{n} {CMD} {c.usage or _label(name, c)}', '', c.summary]
+    if c.options:
+        lines += ['', f'{b}Options:{n}', *_aligned(list(c.options))]
+    if c.aliases:
+        lines += ['', f'{b}Aliases:{n} {", ".join(c.aliases)}']
+    print('\n'.join(lines))
 
-        Show log output for pods in the current namespace.
 
-        {b}Options:{n}
-          -f              Follow log output (streams one pod)
-          --tail <lines>  Number of lines to show (default 20, -1 for all)"""))
-
-
-def _show_dashboard_help() -> None:
-    b, n = _BOLD, _NC
-    print(dedent(f"""\
-        {b}Usage:{n} {CMD} dashboard [-t]
-
-        Open Headlamp dashboard in the browser.
-
-        {b}Options:{n}
-          -t  Generate a new access token (valid 1 year)"""))
+def _print_help(command: str) -> None:
+    name = _ALIASES.get(command, command)
+    if name in _COMMANDS_META:
+        _command_help(name)
+    else:
+        show_help()
 
 
 # -- Main ---------------------------------------------------------------------
-
-# Commands with their own flags get a dedicated --help page; every other
-# command falls back to the show_help() overview (see main).
-_HELP = {
-    'logs':      _show_logs_help,
-    'dashboard': _show_dashboard_help,
-}
 
 _COMMANDS = {
     # Context
@@ -686,9 +736,9 @@ def main() -> None:
     args = positional[1:]
 
     # Single place -h/--help is handled: any command (or a bare flag) prints
-    # help and exits. Commands with their own flags get a dedicated page; the
-    # rest get the overview.
-    if handle_help(positional, _HELP.get(command, show_help)):
+    # help and exits. Each command gets a page rendered from _COMMANDS_META;
+    # unknown commands fall back to the overview.
+    if handle_help(positional, lambda: _print_help(command)):
         sys.exit(0)
 
     ctx = AppContext(ns_override=ns_override)
