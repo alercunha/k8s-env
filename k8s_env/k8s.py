@@ -103,8 +103,20 @@ class KubeCtl(ABC):
         self.stream('logs', '-f', self._tail_arg(tail), pod, '-n', namespace)
 
     def exec_shell(self, pod: str, namespace: str) -> None:
-        # Interactive shell into a pod — needs TTY
-        self.stream_tty('exec', '-it', pod, '-n', namespace, '--', '/bin/sh')
+        # Interactive shell into a pod — needs TTY.
+        # Prefer bash, fall back to sh. The fallback runs inside the container
+        # because os.execvp replaces this process and can't retry.
+        self.stream_tty(
+            'exec', '-it', pod, '-n', namespace, '--',
+            '/bin/sh', '-c', 'command -v bash >/dev/null 2>&1 && exec bash || exec sh',
+        )
+
+    def exec_command(self, pod: str, namespace: str, command: list[str]) -> None:
+        # Run a one-off command in a pod and stream its output back.
+        # The '--' is security-critical: it forces kubectl to treat `command` as
+        # the in-container argv, so a user command starting with '-' can't be
+        # parsed as a kubectl flag (e.g. --as / --kubeconfig / --token). Keep it.
+        self.stream('exec', pod, '-n', namespace, '--', *command)
 
     def stream_tty(self, *args: str) -> None:
         # Replace process entirely so kubectl gets direct terminal control
@@ -279,11 +291,15 @@ class SshKubeCtl(KubeCtl):
         return result.stdout
 
     def stream(self, *args: str) -> None:
+        # shlex.join is security-critical: the remote sshd runs remote_cmd through
+        # a shell, so each arg must be quoted to neutralize shell metacharacters
+        # (;, |, $(), ...) in user-supplied exec commands. Do not interpolate raw.
         remote_cmd = shlex.join(self._base_cmd() + list(args))
         subprocess.run(['ssh', '-n'] + self._SSH_OPTS + ['--', self._host, remote_cmd])
 
     def stream_tty(self, *args: str) -> None:
-        # Replace process with ssh -t for TTY allocation
+        # Replace process with ssh -t for TTY allocation.
+        # shlex.join is security-critical here too — see stream() above.
         remote_cmd = shlex.join(self._base_cmd() + list(args))
         os.execvp('ssh', ['ssh', '-t'] + self._SSH_OPTS + ['--', self._host, remote_cmd])
 
