@@ -589,10 +589,9 @@ class _Cmd:
     group: str
     summary: str
     args: str = ''                                  # positional signature for the overview
-    usage: str = ''                                 # full usage line (overrides name+args)
     options: tuple[tuple[str, str], ...] = ()       # (flag, description) pairs
     aliases: tuple[str, ...] = ()                   # short forms
-    forms: tuple[tuple[str, str], ...] = ()         # extra invocation forms (label, summary)
+    forms: tuple[str, ...] = ()                     # synopsis lines for --help (default: name+args)
     subcommands: tuple[tuple[str, str], ...] = ()   # (usage, summary) — ctx only
 
 
@@ -614,7 +613,7 @@ _COMMANDS_META = {
     # Inspection
     'pods':       _Cmd('Inspection', 'List pods (filter by name)', args='[filter]'),
     'logs':       _Cmd('Inspection', 'Show log output for pods in the current namespace',
-                       args='[filter]', usage='logs [filter] [-f] [--tail N]', options=(
+                       args='[filter]', forms=('logs [filter] [-f] [--tail N]',), options=(
                            ('-f',             'Follow log output (streams one pod)'),
                            ('--tail <lines>', 'Number of lines to show (default 20, -1 for all)'),
                        )),
@@ -627,14 +626,12 @@ _COMMANDS_META = {
     'status':     _Cmd('Inspection', 'Show cluster and namespace stats', aliases=('st',)),
     'describe':   _Cmd('Inspection', 'Describe a resource (picker if omitted)', args='[resource]', aliases=('desc',)),
     # Actions
-    'exec':         _Cmd('Actions', 'Open a shell in a pod (interactive picker)', args='[filter]',
-                         usage='exec [filter] [-- cmd]', aliases=('sh',), forms=(
-                             ('exec [filter] -- cmd', 'Run a command in a pod and return'),
-                         )),
+    'exec':         _Cmd('Actions', 'Open a shell in a pod, or run a command after --', args='[filter]',
+                         aliases=('sh',), forms=('exec [filter]', 'exec [filter] -- cmd')),
     'restart':      _Cmd('Actions', 'Restart deployments (interactive multi-picker)', args='[filter]'),
     'port-forward': _Cmd('Actions', 'Forward a service port (local only)', args='[filter]', aliases=('pf',)),
     'app':          _Cmd('Actions', 'Open a NodePort service in browser (local only)', args='[filter]'),
-    'dashboard':    _Cmd('Actions', 'Open Headlamp dashboard in the browser', usage='dashboard [-t]', options=(
+    'dashboard':    _Cmd('Actions', 'Open Headlamp dashboard in the browser', forms=('dashboard [-t]',), options=(
         ('-t', 'Generate a new access token (valid 1 year)'),
     )),
 }
@@ -654,13 +651,20 @@ def _rows() -> list[tuple[str, str, str]]:
             rows += [(c.group, usage, summary) for usage, summary in c.subcommands]
         else:
             rows.append((c.group, _label(name, c), c.summary))
-            rows += [(c.group, label, summary) for label, summary in c.forms]
     return rows
 
 
 def _aligned(pairs: list[tuple[str, str]], indent: str = '  ') -> list[str]:
     width = max(len(left) for left, _ in pairs) + 2
     return [f'{indent}{left.ljust(width)}{right}' for left, right in pairs]
+
+
+def _usage_lines(name: str, c: _Cmd) -> list[str]:
+    # One synopsis line per invocation form; continuation lines align under the first.
+    forms = c.forms or (_label(name, c),)
+    pad = ' ' * len('Usage: ')
+    return [f'{_BOLD}Usage:{_NC} {CMD} {form}' if i == 0 else f'{pad}{CMD} {form}'
+            for i, form in enumerate(forms)]
 
 
 def show_help() -> None:
@@ -694,7 +698,7 @@ def _command_help(name: str) -> None:
                  '', f'{b}Subcommands:{n}', *_aligned(list(c.subcommands))]
         print('\n'.join(lines))
         return
-    lines = [f'{b}Usage:{n} {CMD} {c.usage or _label(name, c)}', '', c.summary]
+    lines = [*_usage_lines(name, c), '', c.summary]
     if c.options:
         lines += ['', f'{b}Options:{n}', *_aligned(list(c.options))]
     if c.aliases:

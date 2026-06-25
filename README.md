@@ -117,11 +117,13 @@ All inspection commands support an optional filter argument to narrow results by
 
 | Command | Description |
 |---|---|
-| `exec [filter]` | Open a shell in a pod |
+| `exec [filter]` | Open a shell in a pod, or run a command after `--` |
 | `restart [filter]` | Restart deployments (multi-select) |
 | `port-forward [filter]` | Forward a service port to localhost |
 | `app [filter]` | Open a NodePort service in the browser |
 | `dashboard [-t]` | Open Headlamp dashboard (`-t` for new token) |
+
+Everything after `--` is passed to the pod verbatim, so its own flags are not parsed by `k8s` (e.g. `k8s exec api -- tail -n 100 /var/log/app.log`). Command output goes to stdout while interactive chrome (banners, pickers, prompts) goes to stderr, so results pipe cleanly: `k8s exec api -- cat config.json | jq .`.
 
 ### Global options
 
