@@ -724,6 +724,11 @@ _COMMANDS = {
     'dashboard':    lambda ctx, args:  cmd_dashboard(ctx, args),
 }
 
+# Dispatch (_COMMANDS) and help (_COMMANDS_META + _ALIASES) are separate
+# registries; this tripwire fails loudly if they ever drift out of sync.
+assert set(_COMMANDS) == set(_COMMANDS_META) | set(_ALIASES), \
+    'cli: dispatch and help registries are out of sync'
+
 
 def main() -> None:
     ns_override, positional = parse_args(sys.argv[1:], {'-n': ''})
