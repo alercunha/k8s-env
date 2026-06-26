@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
@@ -17,19 +18,28 @@ from k8s_env.utils import CMD, validate
 
 # -- Colors -------------------------------------------------------------------
 
-_RED = '\033[0;31m'
-_GREEN = '\033[0;32m'
-_YELLOW = '\033[1;33m'
-_CYAN = '\033[0;36m'
-_BOLD = '\033[1m'
-_DIM = '\033[2m'
-_NC = '\033[0m'
+# Emit ANSI only when stdout is a terminal, so redirected/piped output stays
+# clean (no escape bytes in files or downstream tools). Honors NO_COLOR too.
+_COLOR = sys.stdout.isatty() and not os.environ.get('NO_COLOR')
+
+
+def _c(code: str) -> str:
+    return code if _COLOR else ''
+
+
+_RED = _c('\033[0;31m')
+_GREEN = _c('\033[0;32m')
+_YELLOW = _c('\033[1;33m')
+_CYAN = _c('\033[0;36m')
+_BOLD = _c('\033[1m')
+_DIM = _c('\033[2m')
+_NC = _c('\033[0m')
 
 # Per-pod prefix colors for multi-tail (cycled when there are more pods).
-_LOG_PALETTE = (
+_LOG_PALETTE = tuple(_c(code) for code in (
     '\033[0;36m', '\033[0;32m', '\033[0;33m', '\033[0;35m', '\033[0;34m', '\033[0;31m',
     '\033[1;36m', '\033[1;32m', '\033[1;33m', '\033[1;35m', '\033[1;34m', '\033[1;31m',
-)
+))
 
 # Cap concurrent follow streams (one process + thread each) to avoid fan-out.
 _MAX_FOLLOW = 50
