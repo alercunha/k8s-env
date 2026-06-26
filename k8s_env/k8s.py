@@ -99,8 +99,12 @@ class KubeCtl(ABC):
     def get_logs(self, pod: str, namespace: str, tail: int = 20, timeout: int | None = None) -> str:
         return self.run('logs', self._tail_arg(tail), pod, '-n', namespace, timeout=timeout)
 
-    def follow_logs(self, pod: str, namespace: str, tail: int = 20) -> None:
-        self.stream('logs', '-f', self._tail_arg(tail), pod, '-n', namespace)
+    def log_follow_argv(self, pod: str, namespace: str, tail: int = 20) -> list[str]:
+        # Full argv to stream one pod's logs (all containers). The multiplexer in
+        # cli.py spawns one of these per pod via Popen and merges the output.
+        return self._base_cmd() + [
+            'logs', '-f', self._tail_arg(tail), '--all-containers=true', pod, '-n', namespace,
+        ]
 
     def exec_shell(self, pod: str, namespace: str) -> None:
         # Interactive shell into a pod — needs TTY.
@@ -302,6 +306,12 @@ class SshKubeCtl(KubeCtl):
         # shlex.join is security-critical here too — see stream() above.
         remote_cmd = shlex.join(self._base_cmd() + list(args))
         os.execvp('ssh', ['ssh', '-t'] + self._SSH_OPTS + ['--', self._host, remote_cmd])
+
+    def log_follow_argv(self, pod: str, namespace: str, tail: int = 20) -> list[str]:
+        # Wrap the inner kubectl invocation in ssh. shlex.join quotes the remote
+        # command for the same reason as stream() above.
+        remote_cmd = shlex.join(self._inner.log_follow_argv(pod, namespace, tail))
+        return ['ssh', '-n'] + self._SSH_OPTS + ['--', self._host, remote_cmd]
 
 
 # -- Factory -----------------------------------------------------------------
