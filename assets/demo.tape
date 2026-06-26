@@ -18,8 +18,9 @@ Set Framerate 10
 Set Theme "Catppuccin Mocha"
 Set TypingSpeed 25ms
 
-# Demo: add a context, list pods, tail filtered logs, exec into a pod,
-# port-forward a service and curl it, glance at status, then show help.
+# Demo: add a context, list pods, tail filtered logs, exec into a pod
+# (shell + one-off command), port-forward a service, glance at status,
+# then show help.
 
 # --- sandbox setup (not shown) ----------------------------------------------
 Hide
@@ -50,7 +51,7 @@ Enter  Sleep 800ms
 Type `k8s logs cart --tail 8  # tail logs by fuzzy name — say "cart", skip the 20-char pod id`  Sleep 1.5s  Enter
 Sleep 4.5s
 
-# --- 4) exec into a pod (filtered), look around, exit -----------------------
+# --- 4) exec into a pod (filtered): a shell, then a one-off command ---------
 Hide
 Type "clear"  Enter
 Show
@@ -63,25 +64,21 @@ Sleep 2.5s
 Enter  Sleep 800ms
 Type `exit  # ...and back to the host`  Sleep 1s  Enter
 Sleep 2s
+Enter  Sleep 800ms
+Type `k8s exec storefront -- ls -la  # ...or run one command and return, no shell`  Sleep 1.5s  Enter
+Sleep 1.5s
+Type "1"                    Sleep 400ms  Enter
+Sleep 3s
 
-# --- 5) port-forward, then curl through it ----------------------------------
+# --- 5) port-forward a service by name, then stop it ------------------------
 Hide
 Type "clear"  Enter
 Show
-Type `k8s pf storefront  # port-forward a service by name — ports figured out for you`  Sleep 1.5s  Enter
+Type `k8s pf storefront  # forward a service port by name — ports figured out for you`  Sleep 1.5s  Enter
 Sleep 1.5s
 Type "8080"                 Sleep 400ms  Enter
-Sleep 2s
-Ctrl+Z
-Sleep 1s
-Enter  Sleep 800ms
-Type `bg  # background it so we keep the terminal`  Sleep 1s  Enter
-Sleep 1.5s
-Enter  Sleep 800ms
-Type `curl -sI localhost:8080 | head -4  # and nginx is right there on the forwarded port`  Sleep 1.5s  Enter
-Sleep 3s
-Enter  Sleep 800ms
-Type `kill %1  # stop the forward — done`  Sleep 1s  Enter
+Sleep 3.5s
+Ctrl+C
 Sleep 2s
 
 # --- 6) status: one-glance health -------------------------------------------

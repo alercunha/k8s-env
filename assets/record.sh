@@ -53,12 +53,24 @@ kubectl --context "$PROFILE" config view --flatten --minify >"$KC"
 kubectl --kubeconfig "$KC" config rename-context "$PROFILE" demo >/dev/null
 kubectl --kubeconfig "$KC" config use-context demo >/dev/null
 
+# Record against the working-tree code, not whatever `k8s` is installed on PATH.
+# The shim is named `k8s` so the basename shown in banners/help stays `k8s`.
+SHIM="$TMP/bin"; mkdir -p "$SHIM"
+cat >"$SHIM/k8s" <<EOF
+#!/usr/bin/env python3
+import sys
+sys.path.insert(0, "$REPO_ROOT")
+from k8s_env.cli import main
+main()
+EOF
+chmod +x "$SHIM/k8s"
+
 # Sandbox: throwaway HOME (isolates trust dir) + empty working dir + a PATH
-# that excludes /snap/bin so microk8s is not discovered.
+# that puts the shim first and excludes /snap/bin so microk8s is not discovered.
 export K8S_DEMO_HOME="$TMP/home";   mkdir -p "$K8S_DEMO_HOME"
 export K8S_DEMO_WORK="$TMP/work";   mkdir -p "$K8S_DEMO_WORK"
 export K8S_DEMO_KC="$KC"
-export K8S_DEMO_PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin"
+export K8S_DEMO_PATH="$SHIM:/usr/local/bin:/usr/bin:/bin"
 
 echo "==> recording (vhs assets/demo.tape -> assets/demo.gif)"
 vhs assets/demo.tape
