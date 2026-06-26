@@ -53,7 +53,23 @@ class Profiles:
     def multi(self) -> bool:
         return self._multi
 
+    def find_by_alias(self, alias: str) -> EnvEntry | None:
+        if not alias:
+            return None
+        for entry in self.list():
+            if entry.env.alias == alias:
+                return entry
+        return None
+
+    def _check_alias_unique(self, env: Env) -> None:
+        if not env.alias:
+            return
+        for entry in self.list():
+            if entry.name != env.profile_name and entry.env.alias == env.alias:
+                raise SystemExit(f'Alias already in use: {env.alias}')
+
     def save(self, env: Env) -> EnvEntry:
+        self._check_alias_unique(env)
         if not self._multi and self._active and self._active.name != env.profile_name:
             self._convert_to_multi()
         if self._multi:

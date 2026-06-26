@@ -11,7 +11,7 @@ from k8s_env.context import AppContext
 from k8s_env.profile import EnvEntry
 from k8s_env.service import Env
 from k8s_env.trust import trust, untrust
-from k8s_env.utils import CMD
+from k8s_env.utils import CMD, validate
 
 # -- Colors -------------------------------------------------------------------
 
@@ -145,7 +145,39 @@ def _ctx_list(ctx: AppContext) -> None:
         print(_format_entry(e, active))
 
 
-def _ctx_add(ctx: AppContext) -> None:
+def _validate_alias(alias: str) -> str:
+    if alias:
+        try:
+            validate('alias', alias)
+        except ValueError as e:
+            raise SystemExit(str(e)) from None
+    return alias
+
+
+def _ensure_alias(alias: str) -> str:
+    if not alias:
+        alias = _input('Alias (optional, enter to skip): ').strip()
+    return _validate_alias(alias)
+
+
+def _resolve_alias(ctx: AppContext, alias: str) -> EnvEntry:
+    entry = ctx.profiles.find_by_alias(alias)
+    if not entry:
+        raise SystemExit(f'No context with alias: {alias}')
+    return entry
+
+
+def _select_context(ctx: AppContext, alias: str, title: str) -> EnvEntry:
+    # Resolve by alias when given, otherwise fall back to the interactive picker
+    if alias:
+        return _resolve_alias(ctx, alias)
+    entries = ctx.profiles.list()
+    active = ctx.profiles.active_name
+    items = [_format_entry(e, active) for e in entries]
+    return entries[pick(title, items)[0][0]]
+
+
+def _ctx_add(ctx: AppContext, args: list[str]) -> None:
     entries = service.discover_local()
     if not entries:
         raise SystemExit('No namespaces found (checked microk8s, minikube, and kubectl contexts)')
@@ -154,13 +186,16 @@ def _ctx_add(ctx: AppContext) -> None:
     groups = [e.group for e in entries]
     selected = entries[pick('Available namespaces', labels, groups=groups)[0][0]]
 
-    env = Env(tool=selected.tool, context=selected.context, namespace=selected.namespace)
+    alias = _ensure_alias(first(args))
+    env = Env(tool=selected.tool, context=selected.context, namespace=selected.namespace, alias=alias)
     ctx.profiles.save(env)
     print()
     print_status(f'Set to {_BOLD}{selected.group}{_NC} namespace: {_BOLD}{selected.namespace}{_NC}')
 
 
-def _ctx_add_remote(ctx: AppContext, host: str) -> None:
+def _ctx_add_remote(ctx: AppContext, args: list[str]) -> None:
+    host = first(args)
+    alias_arg = args[1] if len(args) > 1 else ''
     if not host:
         host = _input('Remote host: ').strip()
         if not host:
@@ -174,35 +209,34 @@ def _ctx_add_remote(ctx: AppContext, host: str) -> None:
     groups = [e.tool for e in entries]
     selected = entries[pick(f'Namespaces on {host}', labels, groups=groups)[0][0]]
 
-    env = Env(tool=selected.tool, ssh_host=host, namespace=selected.namespace)
+    alias = _ensure_alias(alias_arg)
+    env = Env(tool=selected.tool, ssh_host=host, namespace=selected.namespace, alias=alias)
     ctx.profiles.save(env)
     print()
     ns = selected.namespace
     print_status(f'Set to {_YELLOW}{selected.tool} ssh{_NC} host: {_BOLD}{host}{_NC} namespace: {_BOLD}{ns}{_NC}')
 
 
-def _ctx_set(ctx: AppContext) -> None:
+def _ctx_set(ctx: AppContext, alias: str) -> None:
     entries = ctx.profiles.list()
     if not entries:
         raise SystemExit(f'No contexts saved. Run: {CMD} ctx add')
-    if len(entries) == 1:
+    if not alias and len(entries) == 1:
         print_status(f'Already on the only context: {_BOLD}{entries[0].name}{_NC}')
         return
-    active = ctx.profiles.active_name
-    items = [_format_entry(e, active) for e in entries]
-    selected = entries[pick('Activate context', items)[0][0]]
+    selected = _select_context(ctx, alias, 'Activate context')
+    if selected.name == ctx.profiles.active_name:
+        print_status(f'Already on context {_BOLD}{selected.name}{_NC}')
+        return
     ctx.profiles.activate(selected.name)
     print()
     print_status(f'Activated context {_BOLD}{selected.name}{_NC}')
 
 
-def _ctx_del(ctx: AppContext) -> None:
-    entries = ctx.profiles.list()
-    if not entries:
+def _ctx_del(ctx: AppContext, alias: str) -> None:
+    if not ctx.profiles.list():
         raise SystemExit('No contexts saved')
-    active = ctx.profiles.active_name
-    items = [_format_entry(e, active) for e in entries]
-    selected = entries[pick('Delete context', items)[0][0]]
+    selected = _select_context(ctx, alias, 'Delete context')
     new_active = ctx.profiles.delete(selected.name)
     print()
     print_status(f'Deleted context {_BOLD}{selected.name}{_NC}')
@@ -210,14 +244,17 @@ def _ctx_del(ctx: AppContext) -> None:
         print_status(f'Switched to context {_BOLD}{new_active.name}{_NC}')
 
 
-def _ctx_use(ctx: AppContext) -> None:
-    env = ctx.env
+def _ctx_use(ctx: AppContext, alias: str) -> None:
+    # Resolve the target up front, but don't mutate the active context until
+    # the user confirms — aborting must leave everything untouched.
+    selected = _resolve_alias(ctx, alias) if alias else None
+    env = selected.env if selected else ctx.env
     if env.tool not in ('k8s', 'k8s-ssh'):
         print_status(f'{env.tool} does not use kubectl contexts — nothing to do.')
         return
 
     context_name = env.context
-    ns = ctx.namespace
+    ns = ctx.ns_override or env.namespace
     print('This will set your kubectl config to:')
     print(f'  context:   {_BOLD}{context_name}{_NC}')
     print(f'  namespace: {_BOLD}{ns}{_NC}')
@@ -225,6 +262,8 @@ def _ctx_use(ctx: AppContext) -> None:
     if raw != 'y':
         raise SystemExit('Aborted')
 
+    if selected and selected.name != ctx.profiles.active_name:
+        ctx.profiles.activate(selected.name)
     subprocess.run(['kubectl', 'config', 'use-context', context_name], check=True)
     subprocess.run(['kubectl', 'config', 'set-context', context_name,
                      '--namespace', ns], check=True)
@@ -232,31 +271,48 @@ def _ctx_use(ctx: AppContext) -> None:
     print_status(f'kubectl now using context {_BOLD}{context_name}{_NC} / namespace {_BOLD}{ns}{_NC}')
 
 
+def _ctx_alias(ctx: AppContext, alias: str) -> None:
+    env = ctx.env
+    name = ctx.profiles.active_name
+    if not alias:
+        current = f' (current: {env.alias})' if env.alias else ''
+        alias = _input(f'Alias for {name}{current}, enter to clear: ').strip()
+    env.alias = _validate_alias(alias)
+    ctx.profiles.save(env)
+    print()
+    if env.alias:
+        print_status(f'Set alias {_BOLD}{env.alias}{_NC} on {_BOLD}{name}{_NC}')
+    else:
+        print_status(f'Cleared alias on {_BOLD}{name}{_NC}')
+
+
 _CTX_COMMANDS = {
-    '':           lambda ctx, _arg: _ctx_list(ctx),
-    'add':        lambda ctx, _arg: _ctx_add(ctx),
-    'add-remote': lambda ctx, arg:  _ctx_add_remote(ctx, arg),
-    'set':        lambda ctx, _arg: _ctx_set(ctx),
-    'del':        lambda ctx, _arg: _ctx_del(ctx),
-    'use':        lambda ctx, _arg: _ctx_use(ctx),
+    '':           lambda ctx, _args: _ctx_list(ctx),
+    'add':        lambda ctx, args:  _ctx_add(ctx, args),
+    'add-remote': lambda ctx, args:  _ctx_add_remote(ctx, args),
+    'set':        lambda ctx, args:  _ctx_set(ctx, first(args)),
+    'del':        lambda ctx, args:  _ctx_del(ctx, first(args)),
+    'use':        lambda ctx, args:  _ctx_use(ctx, first(args)),
+    'alias':      lambda ctx, args:  _ctx_alias(ctx, first(args)),
 }
 
 
 def cmd_ctx(ctx: AppContext, args: list[str]) -> None:
-    ctx.check_trust()
     sub = first(args)
     handler = _CTX_COMMANDS.get(sub)
     if not handler:
-        raise SystemExit(f'Unknown ctx subcommand: {sub}. Use: add, add-remote, set, del, use')
-    handler(ctx, first(args[1:]))
+        raise SystemExit(f'Unknown ctx subcommand: {sub}. Use: add, add-remote, set, del, use, alias')
+    ctx.check_trust()
+    handler(ctx, args[1:])
 
 
 def _format_entry(e: EnvEntry, active: str) -> str:
     env = e.env
     location = env.ssh_host or env.context or 'local'
+    alias = f' ({env.alias})' if env.alias else ''
     if e.name == active:
-        return f'{_GREEN}[{e.name}]{_NC} {env.tool} on {location} / {env.namespace} {_GREEN}(active){_NC}'
-    return f'{_DIM}[{e.name}] {env.tool} on {location} / {env.namespace}{_NC}'
+        return f'{_GREEN}[{e.name}]{alias}{_NC} {env.tool} on {location} / {env.namespace} {_GREEN}(active){_NC}'
+    return f'{_DIM}[{e.name}]{alias} {env.tool} on {location} / {env.namespace}{_NC}'
 
 
 # -- Other commands -----------------------------------------------------------
@@ -602,11 +658,12 @@ _COMMANDS_META = {
     # Context
     'ctx': _Cmd('Context', 'Manage saved contexts (shows them with no subcommand)', subcommands=(
         ('ctx',                   'Show saved contexts'),
-        ('ctx add',               'Add local k8s namespace as context'),
+        ('ctx add [alias]',       'Add local k8s namespace as context'),
         ('ctx add-remote [host]', 'Add remote k8s namespace via SSH'),
-        ('ctx set',               'Switch active context'),
-        ('ctx del',               'Delete a saved context'),
-        ('ctx use',               'Apply active context to kubectl config'),
+        ('ctx set [alias]',       'Switch active context'),
+        ('ctx del [alias]',       'Delete a saved context'),
+        ('ctx use [alias]',       'Apply active context to kubectl config'),
+        ('ctx alias [alias]',     'Set/clear the alias on the active context'),
     )),
     'allow': _Cmd('Context', 'Trust .k8s-env in current directory'),
     'deny':  _Cmd('Context', 'Remove trust for .k8s-env in current directory'),

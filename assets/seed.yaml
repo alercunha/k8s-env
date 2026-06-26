@@ -1,0 +1,94 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: shop
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: payments
+---
+# shop / storefront — nginx, 2 replicas, with a Service
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: storefront
+  namespace: shop
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: storefront }
+  template:
+    metadata:
+      labels: { app: storefront }
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:1.27-alpine
+          ports: [{ containerPort: 80 }]
+          resources:
+            requests: { cpu: 10m, memory: 16Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: storefront
+  namespace: shop
+spec:
+  selector: { app: storefront }
+  ports: [{ port: 80, targetPort: 80 }]
+---
+# shop / cart — emits steady log lines so `logs` has something to show
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cart
+  namespace: shop
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: cart }
+  template:
+    metadata:
+      labels: { app: cart }
+    spec:
+      containers:
+        - name: cart
+          image: busybox:1.36
+          command: ["sh", "-c"]
+          args:
+            - 'i=0; while true; do echo "$(date +%T) cart: checkout ok order=$i items=$((RANDOM%5+1)) status=200"; i=$((i+1)); sleep 2; done'
+          resources:
+            requests: { cpu: 10m, memory: 16Mi }
+---
+# payments / ledger — 2 replicas, also logging
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ledger
+  namespace: payments
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: ledger }
+  template:
+    metadata:
+      labels: { app: ledger }
+    spec:
+      containers:
+        - name: ledger
+          image: busybox:1.36
+          command: ["sh", "-c"]
+          args:
+            - 'i=0; while true; do echo "$(date +%T) ledger: posted txn=$i amount=$((RANDOM%900+100)).00 USD status=settled"; i=$((i+1)); sleep 2; done'
+          resources:
+            requests: { cpu: 10m, memory: 16Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ledger
+  namespace: payments
+spec:
+  selector: { app: ledger }
+  ports: [{ port: 8080, targetPort: 8080 }]

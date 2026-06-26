@@ -26,6 +26,11 @@ k8s_env/             # Main package (stdlib only — no third-party imports)
 contrib/
   k8s                # Standalone bash alternative (drop-in replacement, limited features)
   README.md          # Differences between bash and Python versions
+assets/
+  demo.tape          # VHS script for the README demo gif
+  record.sh          # Regenerates demo.gif against an isolated, seeded cluster
+  seed.yaml          # Synthetic namespaces/workloads used by the demo
+  demo.gif           # Rendered demo embedded in README.md
 pyproject.toml       # Project metadata, pylint configuration
 ```
 
@@ -42,6 +47,21 @@ pyproject.toml       # Project metadata, pylint configuration
 - `k8s.get()` is a cached factory — returns the right KubeCtl subclass based on tool/context/host.
 - Discovery (`service.py`) runs namespace probes in parallel via `ThreadPoolExecutor` with a 10-second timeout per probe.
 - Profiles support single-file mode (`.k8s-env` file) and multi-profile mode (`.k8s-env/profiles/` directory with `active` symlink). Auto-converts to multi-profile on second `ctx add`.
-- `-h/--help` is handled in one place — `main()` intercepts it for any command and renders help from the `_COMMANDS_META` table (cli.py). Both the `show_help()` overview and every per-command page are generated from that table, so they cannot drift. Aliases (`svc`, `ns`, `cm`, etc.) resolve to their primary entry; unknown commands fall back to the overview. Command handlers do not handle `--help` themselves.
+- Each context may have an optional `alias` (stored in the `.k8s-env` file). Aliases must be unique — `Profiles.save` rejects clashes. `ctx set`/`del`/`use` accept an alias argument to skip the interactive picker. The alias is positional everywhere — `ctx add [alias]` and `ctx add-remote [host] [alias]` — and is prompted when absent. `ctx alias` sets, changes, or clears the alias on the active context in place.
+- `-h/--help` is handled in one place — `main()` intercepts it for any command and renders help from the `_COMMANDS_META` table (cli.py). Both the `show_help()` overview and every per-command page are generated from that table, so they cannot drift. Aliases (`svc`, `ns`, `cm`, etc.) resolve to their primary entry; unknown commands fall back to the overview. Command handlers do not handle `--help` themselves. Because help is resolved before the trust check, `ctx … --help` works in untrusted directories.
 - Errors use `SystemExit` for user-facing messages and `RuntimeError` for kubectl/SSH failures.
 - ANSI color constants are defined in cli.py (`_RED`, `_GREEN`, `_YELLOW`, `_CYAN`, `_BOLD`, `_DIM`, `_NC`).
+
+## Demo GIF
+
+`README.md` embeds `assets/demo.gif`. Regenerate it with `assets/record.sh` (requires `minikube`, `kubectl`, `vhs`, `ttyd`, `ffmpeg`). The script:
+
+- Starts an isolated minikube profile (`kdemo`), applies `assets/seed.yaml` (synthetic `shop`/`payments` namespaces with nginx/busybox workloads), and records `assets/demo.tape` with VHS.
+- Runs the recording under a sandboxed `HOME`/`KUBECONFIG`/`PATH` so no real cluster, kubectl context, or trust file is shown or touched. The kubeconfig context is renamed to `demo` for the recording.
+- Snapshots `~/.kube/config` and the current context on entry and restores them on exit. This is required because `minikube start/stop/delete` mutate the real kubeconfig — on this setup `minikube stop` removes the `minikube` context entirely.
+
+Constraints baked into `demo.tape` (changing them tends to regress the output):
+
+- `Set Framerate 10` — at the gif resolution VHS drops frames at the default framerate, which compresses every `Sleep` and ruins the read pacing. Total runtime targets ~90s.
+- The minikube profile name is kept short (`kdemo`) because it becomes the node name in `kubectl get pods -o wide`; a long name overflows `Width` and wraps the table.
+- `Width` is sized so the widest line (`pods -o wide`, ~119 columns) fits without wrapping.

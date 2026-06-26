@@ -4,6 +4,8 @@ Interactive CLI for managing Kubernetes environments across microk8s, minikube, 
 
 Pure Python 3 — no dependencies beyond the standard library.
 
+![k8s-env demo](assets/demo.gif)
+
 ## Prerequisites
 
 - Python 3.10+
@@ -71,6 +73,14 @@ k8s ctx
 
 Adding a second context automatically converts to multi-profile mode (`.k8s-env/` directory). Switch between contexts with `k8s ctx set`.
 
+Give a context a unique alias to skip the interactive picker:
+
+```
+k8s ctx add prod
+k8s ctx set prod
+k8s ctx use prod
+```
+
 ## Trust
 
 The first time you use a `.k8s-env` file (or after it changes), you'll be prompted to trust it:
@@ -88,11 +98,12 @@ This prevents unexpected execution from modified config files. Remove trust with
 | Command | Description |
 |---|---|
 | `ctx` | Show saved contexts |
-| `ctx add` | Add local k8s namespace as context |
-| `ctx add-remote [host]` | Add remote k8s namespace via SSH |
-| `ctx set` | Switch active context |
-| `ctx del` | Delete a saved context |
-| `ctx use` | Apply active context and namespace to kubectl config |
+| `ctx add [alias]` | Add local k8s namespace as context |
+| `ctx add-remote [host] [alias]` | Add remote k8s namespace via SSH |
+| `ctx set [alias]` | Switch active context (by alias, or interactive picker) |
+| `ctx del [alias]` | Delete a saved context (by alias, or interactive picker) |
+| `ctx use [alias]` | Apply a context to kubectl config (by alias, or the active one) |
+| `ctx alias [alias]` | Set, change, or clear the alias on the active context |
 | `allow` | Trust `.k8s-env` in current directory |
 | `deny` | Remove trust for `.k8s-env` |
 
