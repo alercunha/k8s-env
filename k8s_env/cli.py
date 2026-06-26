@@ -3,11 +3,13 @@ from __future__ import annotations
 import shutil
 import subprocess
 import sys
+import threading
 from dataclasses import dataclass
 
 from k8s_env import service
 from k8s_env.args import first, handle_help, parse_args
 from k8s_env.context import AppContext
+from k8s_env.k8s import KubeCtl
 from k8s_env.profile import EnvEntry
 from k8s_env.service import Env
 from k8s_env.trust import trust, untrust
@@ -22,6 +24,15 @@ _CYAN = '\033[0;36m'
 _BOLD = '\033[1m'
 _DIM = '\033[2m'
 _NC = '\033[0m'
+
+# Per-pod prefix colors for multi-tail (cycled when there are more pods).
+_LOG_PALETTE = (
+    '\033[0;36m', '\033[0;32m', '\033[0;33m', '\033[0;35m', '\033[0;34m', '\033[0;31m',
+    '\033[1;36m', '\033[1;32m', '\033[1;33m', '\033[1;35m', '\033[1;34m', '\033[1;31m',
+)
+
+# Cap concurrent follow streams (one process + thread each) to avoid fan-out.
+_MAX_FOLLOW = 50
 
 
 def _input(prompt: str) -> str:
@@ -391,6 +402,44 @@ def cmd_events(ctx: AppContext, filter_text: str) -> None:
     print_filtered(trimmed, filter_text)
 
 
+def _follow_multi(k: KubeCtl, pods: list[str], ns: str, tail: int) -> None:
+    # Stream every matching pod concurrently, each line prefixed with
+    # a colored, padded pod name. One Popen + reader thread per pod; a lock keeps
+    # lines from interleaving mid-write. Ctrl+C (caught in main) hits the finally.
+    width = max(len(p) for p in pods)
+    lock = threading.Lock()
+    procs: list[subprocess.Popen] = []
+
+    def reader(proc: subprocess.Popen, label: str, color: str) -> None:
+        for line in proc.stdout:
+            with lock:
+                sys.stdout.write(f'{color}{label}{_NC} {line}')
+                sys.stdout.flush()
+
+    threads: list[threading.Thread] = []
+    try:
+        for i, pod in enumerate(pods):
+            color = _LOG_PALETTE[i % len(_LOG_PALETTE)]
+            proc = subprocess.Popen(  # pylint: disable=consider-using-with
+                k.log_follow_argv(pod, ns, tail),
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+            )
+            procs.append(proc)
+            t = threading.Thread(target=reader, args=(proc, pod.ljust(width), color), daemon=True)
+            t.start()
+            threads.append(t)
+        for t in threads:
+            t.join()
+    finally:
+        for proc in procs:
+            proc.terminate()
+        for proc in procs:
+            try:
+                proc.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+
+
 def cmd_logs(ctx: AppContext, args: list[str]) -> None:
     follow, tail, rest = parse_args(args, {'-f': False, '--tail': 20})
     if tail == 0:
@@ -408,10 +457,11 @@ def cmd_logs(ctx: AppContext, args: list[str]) -> None:
         return
 
     if follow:
-        # Pick one pod and stream its logs
-        selected = pick('Follow logs for', pods, auto=True)[0][1]
-        print_status(f'Tailing {_BOLD}{selected}{_NC} (Ctrl+C to stop)')
-        k.follow_logs(selected, ns, tail=tail)
+        if len(pods) > _MAX_FOLLOW:
+            print_warning(f'Following first {_MAX_FOLLOW} of {len(pods)} pods; narrow with a filter')
+            pods = pods[:_MAX_FOLLOW]
+        print_status(f'Tailing {_BOLD}{len(pods)}{_NC} pod(s) (Ctrl+C to stop)')
+        _follow_multi(k, pods, ns, tail)
     else:
         for pod in pods:
             print()
@@ -670,8 +720,8 @@ _COMMANDS_META = {
     # Inspection
     'pods':       _Cmd('Inspection', 'List pods (filter by name)', args='[filter]'),
     'logs':       _Cmd('Inspection', 'Show log output for pods in the current namespace',
-                       args='[filter]', forms=('logs [filter] [-f] [--tail N]',), options=(
-                           ('-f',             'Follow log output (streams one pod)'),
+                       args='[filter]', aliases=('log',), forms=('logs [filter] [-f] [--tail N]',), options=(
+                           ('-f',             'Follow logs from all matching pods concurrently'),
                            ('--tail <lines>', 'Number of lines to show (default 20, -1 for all)'),
                        )),
     'services':   _Cmd('Inspection', 'List services', args='[filter]', aliases=('svc',)),
@@ -781,6 +831,7 @@ _COMMANDS = {
     # Inspection
     'pods':         lambda ctx, args:  cmd_pods(ctx, first(args)),
     'logs':         lambda ctx, args:  cmd_logs(ctx, args),
+    'log':          lambda ctx, args:  cmd_logs(ctx, args),
     'services':     lambda ctx, args:  cmd_services(ctx, first(args)),
     'svc':          lambda ctx, args:  cmd_services(ctx, first(args)),
     'namespaces':   lambda ctx, _args: cmd_namespaces(ctx),
