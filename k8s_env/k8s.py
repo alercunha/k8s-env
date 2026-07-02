@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import shlex
 import subprocess
@@ -149,11 +150,66 @@ class KubeCtl(ABC):
         )
         return [r for r in out.strip().splitlines() if r]
 
-    def get_resources_summary(self, namespace: str, timeout: int | None = None) -> str:
-        return self.run(
-            'get', 'nodes,pods,deployments,services', '-n', namespace,
-            '--no-headers', timeout=timeout,
+    def get_nodes(self, timeout: int | None = None) -> list[tuple[str, str]]:
+        # (name, status) per node; STATUS is "Ready" / "NotReady" / "Ready,SchedulingDisabled".
+        out = self.run('get', 'nodes', '--no-headers', timeout=timeout)
+        nodes = []
+        for line in out.strip().splitlines():
+            parts = line.split()
+            if parts:
+                nodes.append((parts[0], parts[1] if len(parts) > 1 else '?'))
+        return nodes
+
+    def list_pod_status(self, namespace: str, timeout: int | None = None) -> list[tuple[str, str, str, str, str]]:
+        # (name, ready, status, restarts, age). STATUS is kubectl's composite reason
+        # (CrashLoopBackOff, ImagePullBackOff, Pending, ...) — far richer than .status.phase.
+        # AGE is the last column; RESTARTS is the leading token of a "12 (5m ago)" field.
+        out = self.run('get', 'pods', '-n', namespace, '--no-headers', timeout=timeout)
+        pods = []
+        for line in out.strip().splitlines():
+            parts = line.split()
+            if len(parts) >= 3:
+                restarts = parts[3] if len(parts) > 3 else '0'
+                age = parts[-1] if len(parts) >= 5 else ''
+                pods.append((parts[0], parts[1], parts[2], restarts, age))
+        return pods
+
+    def workload_health(self, namespace: str, timeout: int | None = None) -> list[tuple[str, str, int, int]]:
+        # (kind, name, ready, desired) for deployments, statefulsets and daemonsets.
+        # JSON, not jsonpath: ready/available replica fields are omitted when zero
+        # (exactly the degraded case we care about), and one call covers all kinds.
+        out = self.run(
+            'get', 'deployments,statefulsets,daemonsets', '-n', namespace,
+            '-o', 'json', timeout=timeout,
         )
+        workloads = []
+        for item in json.loads(out).get('items', []):
+            status, spec = item.get('status', {}), item.get('spec', {})
+            name = item.get('metadata', {}).get('name', '?')
+            kind = item.get('kind', 'workload').lower()
+            if 'desiredNumberScheduled' in status:      # DaemonSet
+                ready, desired = status.get('numberReady', 0), status['desiredNumberScheduled']
+            else:                                       # Deployment / StatefulSet
+                ready, desired = status.get('readyReplicas', 0), spec.get('replicas', 0)
+            workloads.append((kind, name, ready, desired))
+        return workloads
+
+    def get_warning_events(self, namespace: str, limit: int = 5,
+                           timeout: int | None = None) -> list[tuple[str, str, str, str]]:
+        # (age, reason, object, message). kubectl's default events table already renders
+        # LAST SEEN as a relative age; columns are LAST-SEEN TYPE REASON OBJECT MESSAGE.
+        # kubectl sorts oldest-first, so we take the latest `limit` and reverse.
+        out = self.run(
+            'get', 'events', '-n', namespace, '--field-selector', 'type=Warning',
+            '--sort-by=.lastTimestamp', '--no-headers', timeout=timeout,
+        )
+        events = []
+        for line in out.strip().splitlines():
+            parts = line.split(None, 4)
+            if len(parts) == 5:
+                age, _type, reason, obj, msg = parts
+                events.append((age, reason, obj, msg))
+        return events[-limit:][::-1]
 
     def list_deployments(self, namespace: str, timeout: int | None = None) -> list[str]:
         out = self.run(

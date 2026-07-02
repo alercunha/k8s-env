@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import shutil
 import subprocess
 import sys
@@ -13,56 +12,17 @@ from k8s_env.context import AppContext
 from k8s_env.k8s import KubeCtl
 from k8s_env.profile import EnvEntry
 from k8s_env.service import Env
+from k8s_env.status import cmd_status
 from k8s_env.trust import trust, untrust
+from k8s_env.ui import (
+    _BOLD, _CYAN, _DIM, _GREEN, _LOG_PALETTE, _NC, _YELLOW,
+    _input, print_banner, print_error, print_status, print_warning,
+)
 from k8s_env.utils import CMD, validate
-
-# -- Colors -------------------------------------------------------------------
-
-# Emit ANSI only when stdout is a terminal, so redirected/piped output stays
-# clean (no escape bytes in files or downstream tools). Honors NO_COLOR too.
-_COLOR = sys.stdout.isatty() and not os.environ.get('NO_COLOR')
-
-
-def _c(code: str) -> str:
-    return code if _COLOR else ''
-
-
-_RED = _c('\033[0;31m')
-_GREEN = _c('\033[0;32m')
-_YELLOW = _c('\033[1;33m')
-_CYAN = _c('\033[0;36m')
-_BOLD = _c('\033[1m')
-_DIM = _c('\033[2m')
-_NC = _c('\033[0m')
-
-# Per-pod prefix colors for multi-tail (cycled when there are more pods).
-_LOG_PALETTE = tuple(_c(code) for code in (
-    '\033[0;36m', '\033[0;32m', '\033[0;33m', '\033[0;35m', '\033[0;34m', '\033[0;31m',
-    '\033[1;36m', '\033[1;32m', '\033[1;33m', '\033[1;35m', '\033[1;34m', '\033[1;31m',
-))
 
 # Cap concurrent follow streams (one process + thread each) to avoid fan-out.
 _MAX_FOLLOW = 50
 
-
-def _input(prompt: str) -> str:
-    if not sys.stdin.isatty():
-        raise SystemExit('This command requires an interactive terminal.')
-    # Prompt to stderr so stdout stays clean for piping command output
-    print(prompt, end='', file=sys.stderr, flush=True)
-    return input()
-
-
-def print_status(msg: str) -> None:
-    print(f'{_GREEN}[INFO]{_NC} {msg}', file=sys.stderr)
-
-
-def print_warning(msg: str) -> None:
-    print(f'{_YELLOW}[WARN]{_NC} {msg}', file=sys.stderr)
-
-
-def print_error(msg: str) -> None:
-    print(f'{_RED}[ERROR]{_NC} {msg}', file=sys.stderr)
 
 
 def open_url(url: str) -> None:
@@ -71,19 +31,6 @@ def open_url(url: str) -> None:
             subprocess.Popen([cmd, url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)  # pylint: disable=consider-using-with
             return
     print_warning(f'Could not open browser. Visit {url} manually.')
-
-
-def print_banner(ctx: AppContext) -> None:
-    k = ctx.kubectl
-    name = k.tool_name
-    ns = ctx.namespace
-    if k.ssh_host:
-        line = f'{_YELLOW}[{name} ssh]{_NC} host: {_BOLD}{k.ssh_host}{_NC} | namespace: {_BOLD}{ns}{_NC}'
-    elif k.context:
-        line = f'{_CYAN}[{name} remote]{_NC} context: {_BOLD}{k.context}{_NC} | namespace: {_BOLD}{ns}{_NC}'
-    else:
-        line = f'{_YELLOW}[{name} local]{_NC} namespace: {_BOLD}{ns}{_NC}'
-    print(line, file=sys.stderr)
 
 
 def _filter(items: list, text: str, key=lambda x: x) -> list:
@@ -662,42 +609,6 @@ def cmd_describe(ctx: AppContext, arg: str) -> None:
     print(ctx.kubectl.describe(arg, ns), end='')
 
 
-def cmd_status(ctx: AppContext) -> None:
-    print_banner(ctx)
-    ns = ctx.namespace
-    print()
-
-    output = ctx.kubectl.get_resources_summary(ns)
-    lines = output.strip().splitlines()
-
-    # Count resources by type prefix
-    counts = {'node/': 0, 'pod/': 0, 'deployment': 0, 'service/': 0}
-    pod_lines = []
-    for line in lines:
-        for prefix in counts:
-            if line.startswith(prefix):
-                counts[prefix] += 1
-        if line.startswith('pod/'):
-            pod_lines.append(line)
-
-    print(f'{_BOLD}Cluster:{_NC}')
-    print(f'  Nodes:        {counts["node/"]}')
-    print()
-    print(f'{_BOLD}Namespace {ns}:{_NC}')
-    print(f'  Pods:         {counts["pod/"]}')
-    print(f'  Deployments:  {counts["deployment"]}')
-    print(f'  Services:     {counts["service/"]}')
-    print()
-
-    not_ready = [line for line in pod_lines if 'Running' not in line and 'Completed' not in line]
-    if not_ready:
-        print_warning('Pods not running:')
-        for line in not_ready:
-            print(f'  {line.removeprefix("pod/")}')
-    else:
-        print_status('All pods running')
-
-
 # -- Help ---------------------------------------------------------------------
 
 @dataclass(frozen=True)
@@ -740,7 +651,7 @@ _COMMANDS_META = {
     'configmaps': _Cmd('Inspection', 'List configmaps (interactive viewer)', args='[filter]', aliases=('cm',)),
     'secrets':    _Cmd('Inspection', 'List secret names', args='[filter]'),
     'cronjobs':   _Cmd('Inspection', 'List cronjobs', args='[filter]', aliases=('cj',)),
-    'status':     _Cmd('Inspection', 'Show cluster and namespace stats', aliases=('st',)),
+    'status':     _Cmd('Inspection', 'Health report: verdict, problems, warnings, counts', aliases=('st',)),
     'describe':   _Cmd('Inspection', 'Describe a resource (picker if omitted)', args='[resource]', aliases=('desc',)),
     # Actions
     'exec':         _Cmd('Actions', 'Open a shell in a pod, or run a command after --', args='[filter]',

@@ -16,7 +16,9 @@ uvx pylint k8s_env/
 k8s-env              # Entry point script (#!/usr/bin/env python3)
 k8s_env/             # Main package (stdlib only — no third-party imports)
   args.py            # Generic flag parser (parse_args, with_help, first)
-  cli.py             # Command dispatcher, interactive picker, ctx subcommands, all cmd_* handlers
+  cli.py             # Command dispatcher, interactive picker, ctx subcommands, cmd_* handlers
+  status.py          # The `status` command — namespace health report (cmd_status)
+  ui.py              # Terminal presentation: ANSI colors, print_* helpers, print_banner, _input
   context.py         # AppContext — holds namespace override, trust check, lazy kubectl init
   k8s.py             # KubeCtl ABC + MicroK8s, MiniKube, K8sContext, SshKubeCtl implementations
   service.py         # Env config class (load/save .k8s-env files), namespace discovery
@@ -50,7 +52,8 @@ pyproject.toml       # Project metadata, pylint configuration
 - Each context may have an optional `alias` (stored in the `.k8s-env` file). Aliases must be unique — `Profiles.save` rejects clashes. `ctx set`/`del`/`use` accept an alias argument to skip the interactive picker. The alias is positional everywhere — `ctx add [alias]` and `ctx add-remote [host] [alias]` — and is prompted when absent. `ctx alias` sets, changes, or clears the alias on the active context in place.
 - `-h/--help` is handled in one place — `main()` intercepts it for any command and renders help from the `_COMMANDS_META` table (cli.py). Both the `show_help()` overview and every per-command page are generated from that table, so they cannot drift. Aliases (`svc`, `ns`, `cm`, etc.) resolve to their primary entry; unknown commands fall back to the overview. Command handlers do not handle `--help` themselves. Because help is resolved before the trust check, `ctx … --help` works in untrusted directories.
 - Errors use `SystemExit` for user-facing messages and `RuntimeError` for kubectl/SSH failures.
-- ANSI color constants are defined in cli.py (`_RED`, `_GREEN`, `_YELLOW`, `_CYAN`, `_BOLD`, `_DIM`, `_NC`).
+- Presentation primitives live in `ui.py` (ANSI colors `_RED`/`_GREEN`/`_YELLOW`/`_CYAN`/`_BOLD`/`_DIM`/`_NC`, `print_status`/`print_warning`/`print_error`, `print_banner`, `_input`), imported by both `cli.py` and `status.py`. `ui.py` depends on nothing else in the package, so there is no import cycle. Color emission is gated on `sys.stdout.isatty()` and `NO_COLOR` via `_c()`, so redirected/piped output stays clean.
+- `status` (status.py) reads four kubectl signals — nodes, pods (table; STATUS is kubectl's composite reason), workloads (`-o json`; ready/desired survives the omit-when-zero fields), warning events — and renders answer-first: coloured verdict (green healthy / yellow soft issues / red hard failures), then needs-attention, recent warnings, summary.
 
 ## Demo GIF
 
