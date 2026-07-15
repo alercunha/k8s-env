@@ -19,7 +19,7 @@ Pure Python 3 — no dependencies beyond the standard library.
 Install as a global tool using [uv](https://docs.astral.sh/uv/):
 
 ```bash
-uv tool install "k8s-env @ git+ssh://git@github.com/alercunha/k8s-env.git"
+uv tool install "k8s-env @ git+https://github.com/alercunha/k8s-env.git"
 ```
 
 This installs `k8s` into an isolated environment and adds it to your PATH. Update with:
@@ -31,13 +31,13 @@ uv tool upgrade k8s-env
 ### With pipx
 
 ```bash
-pipx install git+ssh://git@github.com/alercunha/k8s-env.git
+pipx install git+https://github.com/alercunha/k8s-env.git
 ```
 
 ### With pip
 
 ```bash
-pip install git+ssh://git@github.com/alercunha/k8s-env.git
+pip install git+https://github.com/alercunha/k8s-env.git
 ```
 
 ### From source
