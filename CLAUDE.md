@@ -24,6 +24,14 @@ uv run pytest -m integration -v
 - `k8s()` gives the CLI a pty as stdin with picker/prompt answers typed ahead; `k8s_running()` handles commands that run until stopped (`pf`, `logs -f`) and kills the process group afterwards.
 - `K8S_ENV_IT_KEEP=1` keeps the cluster; the next run reuses it (~10s instead of ~60s).
 
+## Dockerfile
+
+Stages: `base` (uv + Python) → `deps` (`uv sync --locked`, cached on pyproject/uv.lock) → `test` (pylint + `uv run pytest`) → `build` (`uv build`) → `integration` (default; adds docker CLI, kind, kubectl). `dist` (`FROM scratch`) exports the wheel with `docker build --target dist -o dist .`.
+
+- `uv run pytest` exits 5 when no tests are collected; the `test` stage accepts that while every test is an integration test.
+- The integration image runs kind against the host daemon: `docker run --rm --network host -v /var/run/docker.sock:/var/run/docker.sock k8s-env`. `--network host` is required because the kind API server and the test's port-forward bind to the host's `127.0.0.1`.
+- kind and kubectl are downloaded per `TARGETARCH` and verified against their published checksums. `KUBECTL_VERSION` tracks the node image of `KIND_VERSION`.
+
 ## Project structure
 
 ```
@@ -46,7 +54,8 @@ assets/
   record.sh          # Regenerates demo.gif against an isolated, seeded cluster
   seed.yaml          # Synthetic namespaces/workloads used by the demo
   demo.gif           # Rendered demo embedded in README.md
-pyproject.toml       # Project metadata, pylint configuration
+Dockerfile           # Staged lint/test/build/integration pipeline with uv
+pyproject.toml       # Project metadata, pylint and pytest configuration
 ```
 
 ## Key constraints
