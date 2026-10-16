@@ -19,10 +19,10 @@ Pure Python 3 — no dependencies beyond the standard library.
 Install as a global tool using [uv](https://docs.astral.sh/uv/):
 
 ```bash
-uv tool install "k8s-env @ git+ssh://git@github.com/alercunha/k8s-env.git"
+uv tool install git+https://github.com/alercunha/k8s-env
 ```
 
-This installs `k8s` into an isolated environment and adds it to your PATH. Update with:
+This installs `k8s` into an isolated environment and adds it to your PATH. Append `@<branch>` to the URL to install a branch. Update with:
 
 ```bash
 uv tool upgrade k8s-env
@@ -31,13 +31,13 @@ uv tool upgrade k8s-env
 ### With pipx
 
 ```bash
-pipx install git+ssh://git@github.com/alercunha/k8s-env.git
+pipx install git+https://github.com/alercunha/k8s-env
 ```
 
 ### With pip
 
 ```bash
-pip install git+ssh://git@github.com/alercunha/k8s-env.git
+pip install git+https://github.com/alercunha/k8s-env
 ```
 
 ### From source
@@ -65,10 +65,15 @@ For remote hosts via SSH:
 k8s ctx add-remote myhost
 ```
 
-Show saved contexts:
+Show saved contexts, grouped by alias project prefix:
 
 ```
-k8s ctx
+$ k8s ctx
+scratch       k8s on kind-local / scratch
+
+shop
+  dev         microk8s on local / shop
+  prod        k8s on gke-prod / shop (active)
 ```
 
 Switch between contexts with `k8s ctx set`.

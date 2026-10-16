@@ -15,7 +15,7 @@ uvx pylint k8s_env/
 ```
 k8s-env              # Entry point script (#!/usr/bin/env python3)
 k8s_env/             # Main package (stdlib only — no third-party imports)
-  args.py            # Generic flag parser (parse_args, with_help, first)
+  args.py            # Generic flag parser (parse_args, handle_help, first)
   cli.py             # Command dispatcher, interactive picker, ctx subcommands, all cmd_* handlers
   context.py         # AppContext — holds context/namespace overrides, lazy kubectl init
   k8s.py             # KubeCtl ABC + MicroK8s, MiniKube, K8sContext, SshKubeCtl implementations
@@ -45,9 +45,10 @@ pyproject.toml       # Project metadata, pylint configuration
 - `KubeCtl` (k8s.py) is an ABC with `run()` for captured output, `stream()` for inherited stdout, and `stream_tty()` for `os.execvp` replacement. `SshKubeCtl` is a decorator that wraps any KubeCtl to route commands through SSH.
 - `k8s.get()` is a cached factory — returns the right KubeCtl subclass based on tool/context/host.
 - Discovery (`service.py`) runs namespace probes in parallel via `ThreadPoolExecutor` with a 10-second timeout per probe.
-- Profiles are stored as `~/.k8s-env/profiles/<name>.env` with an `active` symlink. `Profiles.save` only writes, so saving a non-active profile (e.g. under `-c`) never switches the active one. `Profiles.add` (used by `ctx add`/`add-remote`) saves and activates, keeping an existing profile's port-forwards and alias.
+- Profiles are stored as `~/.k8s-env/profiles/<name>.env` with an `active` symlink. An `active` that is dangling or not a symlink reads as "no active context"; `ctx set` replaces it. `Profiles.save` only writes, so saving a non-active profile (e.g. under `-c`) never switches the active one. `Profiles.add` (used by `ctx add`/`add-remote`) saves and activates, keeping an existing profile's port-forwards and alias.
 - `-c <alias>` (default: `$K8S_ENV_CONTEXT`) overrides the context for one invocation. `AppContext.entry` resolves the effective context; `ctx.profiles.active_name` is the saved one, which `ctx` listings mark as active.
 - Each context may have an optional `alias` (stored in its profile file), matching `segment` or `project/segment` where a segment is `[a-z0-9][-_a-z0-9]*`. The `project/` prefix is naming only; there is no project concept in code. Aliases must be unique — `Profiles.save` rejects clashes. `ctx set`/`del`/`use` accept an alias argument to skip the interactive picker. The alias is positional everywhere — `ctx add [alias]` and `ctx add-remote [host] [alias]` — and is prompted when absent. `ctx alias` sets, changes, or clears the alias on the active context in place.
+- `print_grouped()` (cli.py) renders item lists under group headers; `pick()` and `ctx` (list) both use it. `_context_items()` builds the sorted, aligned context rows (grouped by alias prefix, ungrouped first) for `ctx` and the `ctx set`/`del` pickers.
 - `-h/--help` is handled in one place — `main()` intercepts it for any command and renders help from the `_COMMANDS_META` table (cli.py). Both the `show_help()` overview and every per-command page are generated from that table, so they cannot drift. Aliases (`svc`, `ns`, `cm`, etc.) resolve to their primary entry; unknown commands fall back to the overview. Command handlers do not handle `--help` themselves.
 - Errors use `SystemExit` for user-facing messages and `RuntimeError` for kubectl/SSH failures.
 - ANSI color constants are defined in cli.py (`_RED`, `_GREEN`, `_YELLOW`, `_CYAN`, `_BOLD`, `_DIM`, `_NC`).
