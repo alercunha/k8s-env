@@ -18,15 +18,16 @@ The bash script covers the same core inspection and action commands but lacks se
 
 | Feature | Python (`k8s`) | Bash (`contrib/k8s`) |
 |---|---|---|
-| Shared config in `~/.k8s-env/` | Yes | Yes (reads/writes the active context) |
-| Multiple contexts (`ctx set/del/alias`) | Yes | No |
-| Per-command context override (`-c`, `K8S_ENV_CONTEXT`) | Yes | No |
-| kubectl context discovery in `use` | Yes | Yes |
-| Remote host discovery (`use-remote`) | Yes | Yes |
+| Shared config in `~/.k8s-env/` | Yes | Yes (reads/writes the active env) |
+| Show the active env (`env`) | Yes (lists all envs) | Yes |
+| Multiple envs (`env set/del/rename`) | Yes | No |
+| Per-command env override (`-e`, `K8S_ENV`) | Yes | No |
+| kubectl context discovery (Python `env add` / bash `use`) | Yes | Yes |
+| Remote host discovery (Python `env add-remote` / bash `use-remote`) | Yes | Yes |
 | Port-forward saved mappings | Yes | Yes |
-| All inspection commands (`ctx`, `pods`, `logs`, `services`, `events`, etc.) | Yes | Yes |
+| All inspection commands (`pods`, `logs`, `services`, `events`, etc.) | Yes | Yes |
 | All action commands (`exec`, `restart`, `port-forward`, `app`, `dashboard`) | Yes | Yes |
 | Command aliases (`ns`, `svc`, `cm`, `cj`, `pf`, `sh`, `st`, `desc`) | Yes | Yes |
 | Filter argument on inspection commands | Yes | Yes |
 
-In short: the bash script is a functional subset that handles day-to-day namespace switching and kubectl operations but only works with the active context.
+In short: the bash script is a functional subset that handles day-to-day namespace switching and kubectl operations but only works with the active env. Envs are added with `use` / `use-remote` instead of `env add` / `env add-remote`.

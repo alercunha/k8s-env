@@ -317,11 +317,9 @@ class SshKubeCtl(KubeCtl):
 # -- Factory -----------------------------------------------------------------
 
 _TOOLS: dict[str, type[KubeCtl]] = {
-    'microk8s':     MicroK8s,
-    'microk8s-ssh': MicroK8s,
-    'minikube':     MiniKube,
-    'minikube-ssh': MiniKube,
-    'k8s':          K8sContext,
+    'microk8s': MicroK8s,
+    'minikube': MiniKube,
+    'k8s':      K8sContext,
 }
 
 _CACHE: dict[tuple[str, str, str], KubeCtl] = {}
