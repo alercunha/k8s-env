@@ -174,13 +174,13 @@ Everything after `--` is passed to the pod verbatim, so its own flags are not pa
 Lint:
 
 ```
-uvx pylint k8s_env/ tests/
+uvx --with pytest pylint k8s_env/ tests/
 ```
 
-The integration test runs every command against a throwaway [kind](https://kind.sigs.k8s.io/) cluster seeded with `assets/seed.yaml`. It is skipped by default and requires `docker`, `kind`, and `kubectl`:
+Tests run with pytest (a dev dependency). The integration test runs every command against a throwaway [kind](https://kind.sigs.k8s.io/) cluster seeded with `assets/seed.yaml`. It is marked `integration`, which plain `uv run pytest` deselects, and requires `docker`, `kind`, and `kubectl`:
 
 ```
-K8S_ENV_IT=1 python3 -m unittest discover -s tests -v
+uv run pytest -m integration -v
 ```
 
 Set `K8S_ENV_IT_KEEP=1` to keep the cluster between runs.
