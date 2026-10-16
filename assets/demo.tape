@@ -25,7 +25,6 @@ Set TypingSpeed 25ms
 # --- sandbox setup (not shown) ----------------------------------------------
 Hide
 Type 'export HOME="$K8S_DEMO_HOME" KUBECONFIG="$K8S_DEMO_KC" PATH="$K8S_DEMO_PATH"'  Enter
-Type 'cd "$K8S_DEMO_WORK"'  Enter
 Type `export PS1='\[\e[38;5;213m\]demo\[\e[0m\] \[\e[2m\]❯\[\e[0m\] '`  Enter
 Type "clear"  Enter
 Show

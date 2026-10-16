@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Generic Kubernetes helper script
-# Saves state to .k8s-env in the current directory
+# Saves state to ~/.k8s-env (same layout as the Python version)
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -12,7 +12,8 @@ BOLD='\033[1m'
 DIM='\033[2m'
 NC='\033[0m'
 
-ENV_FILE=".k8s-env"
+CONFIG_DIR="$HOME/.k8s-env"
+ENV_FILE="$CONFIG_DIR/active"
 
 # --- Helpers ---
 
@@ -124,7 +125,7 @@ print_env_banner() {
     fi
 }
 
-# Parse .k8s-env into ENV_* variables (single pass, validated)
+# Parse the active profile into ENV_* variables (single pass, validated)
 load_env_vars() {
     ENV_TOOL="" ENV_CTX="" ENV_NS="" ENV_SSH_HOST=""
     while IFS='=' read -r key val; do
@@ -142,6 +143,9 @@ load_env() {
     if [ ! -f "$ENV_FILE" ]; then
         print_error "No environment set. Run: k8s use"
         exit 1
+    fi
+    if [ -n "${K8S_ENV_CONTEXT:-}" ]; then
+        print_warning "K8S_ENV_CONTEXT is not supported here — using the active context" >&2
     fi
     load_env_vars
     validate_tool "$ENV_TOOL"
@@ -181,30 +185,29 @@ get_namespace() {
     fi
 }
 
-# Write env file with restricted permissions (preserves pf.* lines)
+# Write the profile with restricted permissions (preserves alias and pf.* lines) and activate it
 save_env() {
     local tool="$1" ssh_host="$2" context="$3" namespace="$4"
-    if [ -L "$ENV_FILE" ]; then
-        print_error "$ENV_FILE is a symlink — refusing to write"
-        exit 1
+    local name="${tool}-${ssh_host:-${context:-local}}-${namespace}"
+    local file="$CONFIG_DIR/profiles/$name.env" extra=""
+    (umask 077; mkdir -p "$CONFIG_DIR/profiles")
+    if [ -f "$file" ]; then
+        extra=$(grep -vE '^(tool|ssh_host|context|namespace)=' "$file" || true)
     fi
-    local pf_lines=""
-    if [ -f "$ENV_FILE" ]; then
-        pf_lines=$(grep '^pf\.' "$ENV_FILE" 2>/dev/null || true)
-    fi
-    (umask 077; cat > "$ENV_FILE" <<EOF
+    (umask 077; cat > "$file" <<EOF
 tool=$tool
 ssh_host=$ssh_host
 context=$context
 namespace=$namespace
 EOF
     )
-    if [ -n "$pf_lines" ]; then
-        echo "$pf_lines" >> "$ENV_FILE"
+    if [ -n "$extra" ]; then
+        echo "$extra" >> "$file"
     fi
+    ln -sfn "profiles/$name.env" "$ENV_FILE"
 }
 
-# Save a port-forward mapping to .k8s-env
+# Save a port-forward mapping to the active profile
 save_forward() {
     local svc="$1" remote_port="$2" local_port="$3"
     local key="pf.${svc}.${remote_port}"
@@ -215,7 +218,7 @@ save_forward() {
     echo "${key}=${local_port}" >> "$ENV_FILE"
 }
 
-# Load a saved port-forward mapping from .k8s-env
+# Load a saved port-forward mapping from the active profile
 load_forward() {
     local svc="$1" remote_port="$2"
     local key="pf.${svc}.${remote_port}"

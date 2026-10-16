@@ -13,8 +13,7 @@ from k8s_env.context import AppContext
 from k8s_env.k8s import KubeCtl
 from k8s_env.profile import EnvEntry
 from k8s_env.service import Env
-from k8s_env.trust import trust, untrust
-from k8s_env.utils import CMD, validate
+from k8s_env.utils import CMD, CONTEXT_ENV_VAR, validate
 
 # -- Colors -------------------------------------------------------------------
 
@@ -106,6 +105,24 @@ def print_filtered(output: str, filter_text: str) -> None:
 
 # -- Picker -------------------------------------------------------------------
 
+def print_grouped(
+    items: list[str], groups: list[str] | None = None, *,
+    numbered: bool = False, indent: str = '', file=sys.stdout,
+) -> None:
+    # Items under a header for each run of adjacent equal group names;
+    # items with an empty group name get no header and no extra indent.
+    current = ''
+    for i, item in enumerate(items):
+        group = groups[i] if groups else ''
+        if group != current:
+            if i:
+                print(file=file)
+            print(f'{indent}{_YELLOW}{group}{_NC}', file=file)
+            current = group
+        num = f'{_CYAN}{i + 1}){_NC} ' if numbered else ''
+        print(f'{indent}{"  " if group else ""}{num}{item}', file=file)
+
+
 def pick(
     title: str, items: list[str], *,
     groups: list[str] | None = None, auto: bool = False, multi: bool = False,
@@ -118,18 +135,9 @@ def pick(
         print(f'{_BOLD}{title}:{_NC} {items[0]}', file=sys.stderr)
         return [(0, items[0])]
 
-    # Display items, optionally grouped by adjacent group names (to stderr so
-    # stdout stays clean for piping)
+    # Display to stderr so stdout stays clean for piping
     print(f'{_BOLD}{title}:{_NC}', file=sys.stderr)
-    current_group = ''
-    indent = '    ' if groups else '  '
-    for i, item in enumerate(items):
-        if groups and groups[i] != current_group:
-            if current_group:
-                print(file=sys.stderr)
-            current_group = groups[i]
-            print(f'  {_YELLOW}{current_group}{_NC}', file=sys.stderr)
-        print(f'{indent}{_CYAN}{i + 1}){_NC} {item}', file=sys.stderr)
+    print_grouped(items, groups, numbered=True, indent='  ', file=sys.stderr)
     print(file=sys.stderr)
 
     if multi:
@@ -156,14 +164,37 @@ def pick(
 
 # -- Context commands ---------------------------------------------------------
 
+def _format_entry(label: str, e: EnvEntry, active: str, width: int) -> str:
+    env = e.env
+    location = env.ssh_host or env.context or 'local'
+    details = f'{env.tool} on {location} / {env.namespace}'
+    if e.name == active:
+        return f'{_GREEN}{label.ljust(width)}{details} (active){_NC}'
+    return f'{label.ljust(width)}{_DIM}{details}{_NC}'
+
+
+def _context_items(ctx: AppContext) -> tuple[list[EnvEntry], list[str], list[str]]:
+    # (entries, display items, groups) for print_grouped/pick: 'shop/dev' is item 'dev' in
+    # group 'shop', unaliased contexts show as '[name]'. Ungrouped sort first, aliased before
+    # unaliased. Grouped labels are 2 narrower to offset their indent, keeping details aligned.
+    rows = []
+    for e in ctx.profiles.list():
+        group, _, leaf = e.env.alias.rpartition('/')
+        rows.append((group, leaf or f'[{e.name}]', e))
+    rows.sort(key=lambda r: (r[0], not r[2].env.alias, r[1]))
+    pad = [2 if group else 0 for group, _, _ in rows]
+    width = max((len(label) + p for (_, label, _), p in zip(rows, pad)), default=0) + 2
+    active = ctx.profiles.active_name
+    items = [_format_entry(label, e, active, width - p) for (_, label, e), p in zip(rows, pad)]
+    return [e for _, _, e in rows], items, [group for group, _, _ in rows]
+
+
 def _ctx_list(ctx: AppContext) -> None:
-    entries = ctx.profiles.list()
+    entries, items, groups = _context_items(ctx)
     if not entries:
         print(f'{_DIM}No contexts saved. Run: {CMD} ctx add{_NC}')
         return
-    active = ctx.profiles.active_name
-    for e in entries:
-        print(_format_entry(e, active))
+    print_grouped(items, groups)
 
 
 def _validate_alias(alias: str) -> str:
@@ -181,21 +212,12 @@ def _ensure_alias(alias: str) -> str:
     return _validate_alias(alias)
 
 
-def _resolve_alias(ctx: AppContext, alias: str) -> EnvEntry:
-    entry = ctx.profiles.find_by_alias(alias)
-    if not entry:
-        raise SystemExit(f'No context with alias: {alias}')
-    return entry
-
-
 def _select_context(ctx: AppContext, alias: str, title: str) -> EnvEntry:
     # Resolve by alias when given, otherwise fall back to the interactive picker
     if alias:
-        return _resolve_alias(ctx, alias)
-    entries = ctx.profiles.list()
-    active = ctx.profiles.active_name
-    items = [_format_entry(e, active) for e in entries]
-    return entries[pick(title, items)[0][0]]
+        return ctx.profiles.by_alias(alias)
+    entries, items, groups = _context_items(ctx)
+    return entries[pick(title, items, groups=groups)[0][0]]
 
 
 def _ctx_add(ctx: AppContext, args: list[str]) -> None:
@@ -209,7 +231,7 @@ def _ctx_add(ctx: AppContext, args: list[str]) -> None:
 
     alias = _ensure_alias(first(args))
     env = Env(tool=selected.tool, context=selected.context, namespace=selected.namespace, alias=alias)
-    ctx.profiles.save(env)
+    ctx.profiles.add(env)
     print()
     print_status(f'Set to {_BOLD}{selected.group}{_NC} namespace: {_BOLD}{selected.namespace}{_NC}')
 
@@ -232,7 +254,7 @@ def _ctx_add_remote(ctx: AppContext, args: list[str]) -> None:
 
     alias = _ensure_alias(alias_arg)
     env = Env(tool=selected.tool, ssh_host=host, namespace=selected.namespace, alias=alias)
-    ctx.profiles.save(env)
+    ctx.profiles.add(env)
     print()
     ns = selected.namespace
     print_status(f'Set to {_YELLOW}{selected.tool} ssh{_NC} host: {_BOLD}{host}{_NC} namespace: {_BOLD}{ns}{_NC}')
@@ -252,6 +274,8 @@ def _ctx_set(ctx: AppContext, alias: str) -> None:
     ctx.profiles.activate(selected.name)
     print()
     print_status(f'Activated context {_BOLD}{selected.name}{_NC}')
+    if ctx.ctx_override:
+        print_warning(f'-c / {CONTEXT_ENV_VAR} ({ctx.ctx_override}) still takes precedence')
 
 
 def _ctx_del(ctx: AppContext, alias: str) -> None:
@@ -268,7 +292,7 @@ def _ctx_del(ctx: AppContext, alias: str) -> None:
 def _ctx_use(ctx: AppContext, alias: str) -> None:
     # Resolve the target up front, but don't mutate the active context until
     # the user confirms — aborting must leave everything untouched.
-    selected = _resolve_alias(ctx, alias) if alias else None
+    selected = ctx.profiles.by_alias(alias) if alias else None
     env = selected.env if selected else ctx.env
     if env.tool not in ('k8s', 'k8s-ssh'):
         print_status(f'{env.tool} does not use kubectl contexts — nothing to do.')
@@ -294,7 +318,7 @@ def _ctx_use(ctx: AppContext, alias: str) -> None:
 
 def _ctx_alias(ctx: AppContext, alias: str) -> None:
     env = ctx.env
-    name = ctx.profiles.active_name
+    name = ctx.entry.name
     if not alias:
         current = f' (current: {env.alias})' if env.alias else ''
         alias = _input(f'Alias for {name}{current}, enter to clear: ').strip()
@@ -323,50 +347,10 @@ def cmd_ctx(ctx: AppContext, args: list[str]) -> None:
     handler = _CTX_COMMANDS.get(sub)
     if not handler:
         raise SystemExit(f'Unknown ctx subcommand: {sub}. Use: add, add-remote, set, del, use, alias')
-    ctx.check_trust()
     handler(ctx, args[1:])
 
 
-def _format_entry(e: EnvEntry, active: str) -> str:
-    env = e.env
-    location = env.ssh_host or env.context or 'local'
-    alias = f' ({env.alias})' if env.alias else ''
-    if e.name == active:
-        return f'{_GREEN}[{e.name}]{alias}{_NC} {env.tool} on {location} / {env.namespace} {_GREEN}(active){_NC}'
-    return f'{_DIM}[{e.name}]{alias} {env.tool} on {location} / {env.namespace}{_NC}'
-
-
 # -- Other commands -----------------------------------------------------------
-
-def _env_summary(env: Env) -> str:
-    parts = [env.tool]
-    if env.ssh_host:
-        parts.append(f'on {_YELLOW}{env.ssh_host}{_NC}')
-    elif env.context:
-        parts.append(f'on context {env.context}')
-    else:
-        parts.append('on local')
-    parts.append(f'namespace {env.namespace}')
-    return ' / '.join(parts)
-
-
-def cmd_allow(ctx: AppContext) -> None:
-    print(f'{_BOLD}Trusting .k8s-env:{_NC}')
-    for entry in ctx.profiles.list():
-        print(f'  {_env_summary(entry.env)}')
-    raw = _input('\nAllow? [y/N]: ').strip().lower()
-    if raw != 'y':
-        raise SystemExit('Aborted')
-    for entry in ctx.profiles.list():
-        trust(entry.path)
-    print_status('Trusted .k8s-env in current directory')
-
-
-def cmd_deny(ctx: AppContext) -> None:
-    for entry in ctx.profiles.list():
-        untrust(entry.path)
-    print_status('Removed trust for .k8s-env in current directory')
-
 
 def cmd_namespaces(ctx: AppContext) -> None:
     print_banner(ctx)
@@ -725,8 +709,6 @@ _COMMANDS_META = {
         ('ctx use [alias]',       'Apply active context to kubectl config'),
         ('ctx alias [alias]',     'Set/clear the alias on the active context'),
     )),
-    'allow': _Cmd('Context', 'Trust .k8s-env in current directory'),
-    'deny':  _Cmd('Context', 'Remove trust for .k8s-env in current directory'),
     # Inspection
     'pods':       _Cmd('Inspection', 'List pods (filter by name)', args='[filter]'),
     'logs':       _Cmd('Inspection', 'Show log output for pods in the current namespace',
@@ -790,7 +772,7 @@ def show_help() -> None:
     lines = [
         f'{b}{CMD}{n} — Kubernetes environment helper',
         '',
-        f'{b}Usage:{n} {CMD} <command> [args] [-n namespace]',
+        f'{b}Usage:{n} {CMD} <command> [args] [-c alias] [-n namespace]',
         '',
     ]
     width = max(len(label) for _, label, _ in rows) + 2
@@ -801,6 +783,7 @@ def show_help() -> None:
         lines.append('')
     lines.append(f'{b}Options:{n}')
     lines += [f'  {left.ljust(width)}{right}' for left, right in (
+        ('-c <alias>', f'Use this context instead of the active one (env: {CONTEXT_ENV_VAR})'),
         ('-n <namespace>', 'Override saved namespace'),
         ('-h, --help', 'Show this help'),
     )]
@@ -836,8 +819,6 @@ def _print_help(command: str) -> None:
 _COMMANDS = {
     # Context
     'ctx':          lambda ctx, args:  cmd_ctx(ctx, args),
-    'allow':        lambda ctx, _args: cmd_allow(ctx),
-    'deny':         lambda ctx, _args: cmd_deny(ctx),
     # Inspection
     'pods':         lambda ctx, args:  cmd_pods(ctx, first(args)),
     'logs':         lambda ctx, args:  cmd_logs(ctx, args),
@@ -879,7 +860,10 @@ def main() -> None:
     sep = argv.index('--') if '--' in argv else -1
     head, passthrough = (argv[:sep], argv[sep:]) if sep >= 0 else (argv, [])
 
-    ns_override, positional = parse_args(head, {'-n': ''})
+    ctx_override, ns_override, positional = parse_args(head, {
+        '-c': os.environ.get(CONTEXT_ENV_VAR, ''),
+        '-n': '',
+    })
 
     if not positional:
         show_help()
@@ -894,7 +878,7 @@ def main() -> None:
     if handle_help(positional, lambda: _print_help(command)):
         sys.exit(0)
 
-    ctx = AppContext(ns_override=ns_override)
+    ctx = AppContext(ctx_override=ctx_override, ns_override=ns_override)
     try:
         handler = _COMMANDS.get(command)
         if not handler:

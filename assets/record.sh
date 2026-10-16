@@ -3,7 +3,7 @@
 #
 # Spins up an isolated minikube profile, seeds synthetic namespaces, and runs
 # VHS against a sandboxed HOME/KUBECONFIG/PATH so no real cluster, context, or
-# trust state is ever touched or recorded.
+# ~/.k8s-env is ever touched or recorded.
 #
 # Requirements: minikube, kubectl, vhs, ttyd, ffmpeg.
 set -euo pipefail
@@ -65,10 +65,9 @@ main()
 EOF
 chmod +x "$SHIM/k8s"
 
-# Sandbox: throwaway HOME (isolates trust dir) + empty working dir + a PATH
-# that puts the shim first and excludes /snap/bin so microk8s is not discovered.
+# Sandbox: throwaway HOME (isolates ~/.k8s-env) + a PATH that puts the shim
+# first and excludes /snap/bin so microk8s is not discovered.
 export K8S_DEMO_HOME="$TMP/home";   mkdir -p "$K8S_DEMO_HOME"
-export K8S_DEMO_WORK="$TMP/work";   mkdir -p "$K8S_DEMO_WORK"
 export K8S_DEMO_KC="$KC"
 export K8S_DEMO_PATH="$SHIM:/usr/local/bin:/usr/bin:/bin"
 

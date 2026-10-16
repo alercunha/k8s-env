@@ -57,7 +57,7 @@ Discover local Kubernetes runtimes and pick a namespace:
 k8s ctx add
 ```
 
-This probes microk8s, minikube, and all kubectl contexts in parallel, then presents an interactive picker. Your selection is saved to `.k8s-env` in the current directory.
+This probes microk8s, minikube, and all kubectl contexts in parallel, then presents an interactive picker. Your selection is saved as a context in `~/.k8s-env/` and becomes the active one.
 
 For remote hosts via SSH:
 
@@ -71,25 +71,34 @@ Show saved contexts:
 k8s ctx
 ```
 
-Adding a second context automatically converts to multi-profile mode (`.k8s-env/` directory). Switch between contexts with `k8s ctx set`.
+Switch between contexts with `k8s ctx set`.
 
-Give a context a unique alias to skip the interactive picker:
-
-```
-k8s ctx add prod
-k8s ctx set prod
-k8s ctx use prod
-```
-
-## Trust
-
-The first time you use a `.k8s-env` file (or after it changes), you'll be prompted to trust it:
+Give a context a unique alias to skip the interactive picker. Aliases use lowercase letters, digits, `-` and `_`, with an optional `project/` prefix to group environments per project:
 
 ```
-k8s allow
+k8s ctx add shop/dev
+k8s ctx set shop/prod
+k8s ctx use shop/prod
 ```
 
-This prevents unexpected execution from modified config files. Remove trust with `k8s deny`.
+Run a single command against another context without switching, with `-c` or the `K8S_ENV_CONTEXT` environment variable (`-c` wins):
+
+```
+k8s -c billing/prod pods
+export K8S_ENV_CONTEXT=shop/dev   # pin this shell to shop/dev
+```
+
+## Configuration
+
+Contexts live in `~/.k8s-env/`:
+
+```
+~/.k8s-env/
+  profiles/<name>.env    one file per context
+  active                 symlink to the active profile
+```
+
+The directory is created with mode `0700` and profile files with `0600`. `k8s` refuses to run if `~/.k8s-env` is not owned by you or is accessible by group/others.
 
 ## Commands
 
@@ -104,8 +113,6 @@ This prevents unexpected execution from modified config files. Remove trust with
 | `ctx del [alias]` | Delete a saved context (by alias, or interactive picker) |
 | `ctx use [alias]` | Apply a context to kubectl config (by alias, or the active one) |
 | `ctx alias [alias]` | Set, change, or clear the alias on the active context |
-| `allow` | Trust `.k8s-env` in current directory |
-| `deny` | Remove trust for `.k8s-env` |
 
 ### Inspection
 
@@ -140,6 +147,7 @@ Everything after `--` is passed to the pod verbatim, so its own flags are not pa
 
 | Flag | Description |
 |---|---|
+| `-c <alias>` | Use this context instead of the active one for this invocation (default: `$K8S_ENV_CONTEXT`) |
 | `-n <namespace>` | Override the saved namespace for this invocation |
 | `-h, --help` | Show help (also works per-command: `k8s logs --help`) |
 
@@ -152,4 +160,4 @@ Everything after `--` is passed to the pod verbatim, so its own flags are not pa
 
 ## Bash alternative
 
-A standalone Bash drop-in replacement is available in [`contrib/k8s`](contrib/) for systems where Python 3.10+ cannot be installed. It covers the core commands but does not support the trust system, profiles, or parallel discovery. See [`contrib/README.md`](contrib/README.md) for details.
+A standalone Bash drop-in replacement is available in [`contrib/k8s`](contrib/) for systems where Python 3.10+ cannot be installed. It shares `~/.k8s-env/` with the Python version and covers the core commands, but does not manage multiple contexts or run parallel discovery. See [`contrib/README.md`](contrib/README.md) for details.

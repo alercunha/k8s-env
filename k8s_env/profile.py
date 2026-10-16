@@ -1,65 +1,66 @@
 from __future__ import annotations
 
 import builtins
+import contextlib
 import os
-import shutil
 from dataclasses import dataclass
 
 from k8s_env.service import Env
-from k8s_env.trust import trust
-from k8s_env.utils import CMD, ENV_FILE
+from k8s_env.utils import CMD, CONFIG_DIR
 
-_PROFILES_DIR = os.path.join(ENV_FILE, 'profiles')
-_ACTIVE_LINK = os.path.join(ENV_FILE, 'active')
+_PROFILES_DIR = os.path.join(CONFIG_DIR, 'profiles')
+_ACTIVE_LINK = os.path.join(CONFIG_DIR, 'active')
 
 
 @dataclass
 class EnvEntry:
     name: str
     env: Env
-    path: str
+
+
+def _path(name: str) -> str:
+    return os.path.join(_PROFILES_DIR, f'{name}.env')
+
+
+def _entry(name: str) -> EnvEntry:
+    return EnvEntry(name=name, env=Env.load(_path(name)))
+
+
+def _check_permissions() -> None:
+    st = os.stat(CONFIG_DIR)
+    if st.st_uid != os.getuid():
+        raise SystemExit(f'Refusing to load {CONFIG_DIR}: not owned by you')
+    if st.st_mode & 0o077:
+        raise SystemExit(f'Refusing to load {CONFIG_DIR}: permissions too open. Run: chmod 700 {CONFIG_DIR}')
 
 
 class Profiles:
     def __init__(self) -> None:
-        self._multi = False
         self._active: EnvEntry | None = None
-        if os.path.isdir(ENV_FILE):
-            self._multi = True
-            if os.path.islink(_ACTIVE_LINK):
-                resolved = os.path.realpath(_ACTIVE_LINK)
-                env_dir = os.path.realpath(ENV_FILE)
-                if not resolved.startswith(env_dir + os.sep):
-                    raise SystemExit('Refusing to load: active symlink points outside .k8s-env/')
-                name = os.path.basename(resolved).removesuffix('.env')
-                self._active = EnvEntry(name=name, env=Env.load(resolved), path=resolved)
-        elif os.path.isfile(ENV_FILE):
-            env = Env.load(ENV_FILE)
-            self._active = EnvEntry(name=env.profile_name, env=env, path=ENV_FILE)
+        if not os.path.isdir(CONFIG_DIR):
+            if os.path.lexists(CONFIG_DIR):
+                raise SystemExit(f'{CONFIG_DIR} exists but is not a directory')
+            return
+        _check_permissions()
+        # A dangling link or a non-link file reads as "no active context"
+        if os.path.islink(_ACTIVE_LINK) and os.path.isfile(_ACTIVE_LINK):
+            self._active = _entry(os.path.basename(os.readlink(_ACTIVE_LINK)).removesuffix('.env'))
 
     @property
     def active(self) -> EnvEntry:
         if self._active is None:
-            if self._multi:
-                raise SystemExit(f'No active context. Run: {CMD} ctx set')
-            raise SystemExit(f'No environment set. Run: {CMD} ctx add')
+            raise SystemExit(f'No active context. Run: {CMD} ctx {"set" if self.list() else "add"}')
         return self._active
 
     @property
     def active_name(self) -> str:
         return self._active.name if self._active else ''
 
-    @property
-    def multi(self) -> bool:
-        return self._multi
-
-    def find_by_alias(self, alias: str) -> EnvEntry | None:
-        if not alias:
-            return None
+    def by_alias(self, alias: str) -> EnvEntry:
         for entry in self.list():
             if entry.env.alias == alias:
                 return entry
-        return None
+        raise SystemExit(f'No context with alias: {alias}')
 
     def _check_alias_unique(self, env: Env) -> None:
         if not env.alias:
@@ -68,86 +69,42 @@ class Profiles:
             if entry.name != env.profile_name and entry.env.alias == env.alias:
                 raise SystemExit(f'Alias already in use: {env.alias}')
 
-    def save(self, env: Env) -> EnvEntry:
+    def save(self, env: Env) -> None:
         self._check_alias_unique(env)
-        if not self._multi and self._active and self._active.name != env.profile_name:
-            self._convert_to_multi()
-        if self._multi:
-            path = self._write_profile(env.profile_name, env)
-            self._symlink_active(path)
-            entry = EnvEntry(name=env.profile_name, env=env, path=path)
-        else:
-            if os.path.islink(ENV_FILE):
-                raise SystemExit(f'{ENV_FILE} is a symlink — refusing to write')
-            env.save(ENV_FILE)
-            entry = EnvEntry(name=env.profile_name, env=env, path=ENV_FILE)
-        trust(entry.path)
-        self._active = entry
-        return entry
+        os.makedirs(CONFIG_DIR, mode=0o700, exist_ok=True)
+        os.makedirs(_PROFILES_DIR, mode=0o700, exist_ok=True)
+        env.save(_path(env.profile_name))
 
-    def _convert_to_multi(self) -> None:
-        current_env = self._active.env
-        os.remove(ENV_FILE)
-        current_path = self._write_profile(current_env.profile_name, current_env)
-        trust(current_path)
-        self._multi = True
+    def add(self, env: Env) -> None:
+        # Re-adding an existing context keeps its saved port-forwards and alias
+        if os.path.isfile(_path(env.profile_name)):
+            existing = Env.load(_path(env.profile_name))
+            env.port_forwards = existing.port_forwards
+            env.alias = env.alias or existing.alias
+        self.save(env)
+        self.activate(env.profile_name)
 
     def list(self) -> builtins.list[EnvEntry]:
-        if not self._multi:
-            return [self._active] if self._active else []
         if not os.path.isdir(_PROFILES_DIR):
             return []
-        entries: builtins.list[EnvEntry] = []
-        for fname in sorted(os.listdir(_PROFILES_DIR)):
-            if not fname.endswith('.env'):
-                continue
-            path = os.path.join(_PROFILES_DIR, fname)
-            entries.append(EnvEntry(
-                name=fname.removesuffix('.env'),
-                env=Env.load(path),
-                path=path,
-            ))
-        return entries
+        return [_entry(f.removesuffix('.env'))
+                for f in sorted(os.listdir(_PROFILES_DIR)) if f.endswith('.env')]
 
     def activate(self, name: str) -> None:
-        path = os.path.join(_PROFILES_DIR, f'{name}.env')
-        if not os.path.isfile(path):
-            raise SystemExit(f'Context not found: {name}')
-        self._symlink_active(path)
-        trust(path)
-        self._active = EnvEntry(name=name, env=Env.load(path), path=path)
+        tmp = _ACTIVE_LINK + '.tmp'
+        with contextlib.suppress(FileNotFoundError):
+            os.remove(tmp)
+        os.symlink(os.path.relpath(_path(name), CONFIG_DIR), tmp)
+        os.replace(tmp, _ACTIVE_LINK)
+        self._active = _entry(name)
 
     def delete(self, name: str) -> EnvEntry | None:
-        if not self._multi:
-            if not self._active or self._active.name != name:
-                raise SystemExit(f'Context not found: {name}')
-            os.remove(ENV_FILE)
-            self._active = None
-            return None
-        path = os.path.join(_PROFILES_DIR, f'{name}.env')
-        if not os.path.isfile(path):
-            raise SystemExit(f'Context not found: {name}')
-        was_active = self._active and self._active.name == name
+        was_active = self.active_name == name
         if was_active:
             os.remove(_ACTIVE_LINK)
             self._active = None
-        os.remove(path)
-        remaining = sorted(f for f in os.listdir(_PROFILES_DIR) if f.endswith('.env'))
-        if not remaining:
-            shutil.rmtree(ENV_FILE)
-            self._multi = False
-        elif was_active:
-            self.activate(remaining[0].removesuffix('.env'))
+        os.remove(_path(name))
+        remaining = self.list()
+        if was_active and remaining:
+            self.activate(remaining[0].name)
         return self._active if was_active else None
-
-    def _write_profile(self, name: str, env: Env) -> str:
-        os.makedirs(_PROFILES_DIR, exist_ok=True)
-        path = os.path.join(_PROFILES_DIR, f'{name}.env')
-        env.save(path)
-        return path
-
-    def _symlink_active(self, path: str) -> None:
-        rel = os.path.relpath(path, ENV_FILE)
-        tmp = _ACTIVE_LINK + '.tmp'
-        os.symlink(rel, tmp)
-        os.replace(tmp, _ACTIVE_LINK)

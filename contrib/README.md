@@ -18,8 +18,9 @@ The bash script covers the same core inspection and action commands but lacks se
 
 | Feature | Python (`k8s`) | Bash (`contrib/k8s`) |
 |---|---|---|
-| Trust system (`allow` / `deny`) | Yes | No |
-| Multi-profile management (`profile`) | Yes | No |
+| Shared config in `~/.k8s-env/` | Yes | Yes (reads/writes the active context) |
+| Multiple contexts (`ctx set/del/alias`) | Yes | No |
+| Per-command context override (`-c`, `K8S_ENV_CONTEXT`) | Yes | No |
 | kubectl context discovery in `use` | Yes | Yes |
 | Remote host discovery (`use-remote`) | Yes | Yes |
 | Port-forward saved mappings | Yes | Yes |
@@ -28,4 +29,4 @@ The bash script covers the same core inspection and action commands but lacks se
 | Command aliases (`ns`, `svc`, `cm`, `cj`, `pf`, `sh`, `st`, `desc`) | Yes | Yes |
 | Filter argument on inspection commands | Yes | Yes |
 
-In short: the bash script is a functional subset that handles day-to-day namespace switching and kubectl operations but does not support the trust model or profiles.
+In short: the bash script is a functional subset that handles day-to-day namespace switching and kubectl operations but only works with the active context.

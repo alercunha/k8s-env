@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import os
 import stat
 import subprocess
@@ -17,14 +16,13 @@ class Env:
     def __init__(
         self, tool: str, ssh_host: str = '', context: str = '',
         namespace: str = '', port_forwards: dict[str, str] | None = None,
-        content_hash: str = '', alias: str = '',
+        alias: str = '',
     ) -> None:
         self.tool = tool
         self.ssh_host = ssh_host
         self.context = context
         self.namespace = namespace
         self.port_forwards = port_forwards or {}
-        self.content_hash = content_hash
         self.alias = alias
 
     @classmethod
@@ -32,13 +30,12 @@ class Env:
         mode = os.lstat(path).st_mode
         if not stat.S_ISREG(mode):
             raise SystemExit(f'Refusing to load {path}: not a regular file')
-        with open(path, 'rb') as f:
+        with open(path, encoding='utf-8') as f:
             raw = f.read()
-        content_hash = hashlib.sha256(raw).hexdigest()
         # Parse key=value pairs; pf.* lines become port_forwards
         fields: dict[str, str] = {}
         port_forwards: dict[str, str] = {}
-        for line in raw.decode().splitlines():
+        for line in raw.splitlines():
             line = line.strip()
             if not line or '=' not in line:
                 continue
@@ -53,7 +50,6 @@ class Env:
             context=fields.get('context', ''),
             namespace=fields.get('namespace', ''),
             port_forwards=port_forwards,
-            content_hash=content_hash,
             alias=fields.get('alias', ''),
         )
         env.validate()

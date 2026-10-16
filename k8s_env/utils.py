@@ -5,7 +5,8 @@ import re
 import shutil
 import sys
 
-ENV_FILE = '.k8s-env'
+CONFIG_DIR = os.path.join(os.path.expanduser('~'), '.k8s-env')
+CONTEXT_ENV_VAR = 'K8S_ENV_CONTEXT'
 CMD = os.path.basename(sys.argv[0])
 
 SYSTEM_NAMESPACES = frozenset({
@@ -17,8 +18,7 @@ _VALIDATORS = {
     'context':   re.compile(r'^[A-Za-z0-9._:@-]+$'),
     'namespace': re.compile(r'^[a-z0-9][-a-z0-9]*[a-z0-9]?$'),
     'host':      re.compile(r'^[A-Za-z0-9._@:-]+$'),
-    'profile':   re.compile(r'^[a-z0-9][-a-z0-9]*$'),
-    'alias':     re.compile(r'^[a-z0-9][-a-z0-9]*$'),
+    'alias':     re.compile(r'^[a-z0-9][-_a-z0-9]*(/[a-z0-9][-_a-z0-9]*)?$'),
 }
 
 
