@@ -18,17 +18,16 @@ Set Framerate 10
 Set Theme "Catppuccin Mocha"
 Set TypingSpeed 25ms
 
-# Demo: add a project-scoped context, list contexts grouped by project, list
-# pods, peek at another context with -c, tail filtered logs, exec into a pod
-# (shell + one-off command), port-forward a service, glance at status, then
-# show help.
+# Demo: add a project-scoped env, list envs grouped by project, list pods,
+# peek at another env with -e, tail filtered logs, exec into a pod (shell +
+# one-off command), port-forward a service, glance at status, then show help.
 
 # --- sandbox setup (not shown) ----------------------------------------------
-# Pre-adds payments/dev so the grouped `k8s ctx` list has two projects.
+# Pre-adds payments/dev so the grouped `k8s env` list has two projects.
 Hide
 Type 'export HOME="$K8S_DEMO_HOME" KUBECONFIG="$K8S_DEMO_KC" PATH="$K8S_DEMO_PATH"'  Enter
 Type `export PS1='\[\e[38;5;213m\]demo\[\e[0m\] \[\e[2m\]❯\[\e[0m\] '`  Enter
-Type "k8s ctx add payments/dev"  Enter
+Type "k8s env add payments/dev"  Enter
 Sleep 4s
 Type "1"  Enter
 Sleep 1s
@@ -36,23 +35,23 @@ Type "clear"  Enter
 Show
 Sleep 500ms
 
-# --- 1) add a context under a project alias, then list contexts -------------
-Type `k8s ctx add shop/dev  # scan all clusters, pick a namespace, save it as shop/dev`  Sleep 1.5s  Enter
+# --- 1) add an env under a project name, then list envs ---------------------
+Type `k8s env add shop/dev  # scan all clusters, pick a namespace, save it as shop/dev`  Sleep 1.5s  Enter
 Sleep 3s
 Type "2"                    Sleep 400ms  Enter
 Sleep 2.5s
 Enter  Sleep 800ms
-Type `k8s ctx  # all saved contexts, grouped by project`  Sleep 1.5s  Enter
+Type `k8s env  # all saved envs, grouped by project`  Sleep 1.5s  Enter
 Sleep 4s
 
-# --- 2) list pods, then peek at another context without switching ----------
+# --- 2) list pods, then peek at another env without switching --------------
 Hide
 Type "clear"  Enter
 Show
-Type `k8s pods  # pods in the active context — no --context, no -n, it just knows`  Sleep 1.5s  Enter
+Type `k8s pods  # pods in the active env — no --context, no -n, it just knows`  Sleep 1.5s  Enter
 Sleep 4.5s
 Enter  Sleep 800ms
-Type `k8s -c payments/dev pods  # peek at another context without switching`  Sleep 1.5s  Enter
+Type `k8s -e payments/dev pods  # peek at another env without switching`  Sleep 1.5s  Enter
 Sleep 4.5s
 
 # --- 3) logs, filtered to the cart pod --------------------------------------

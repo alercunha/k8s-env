@@ -51,73 +51,79 @@ ln -s "$(pwd)/k8s-env/k8s-env" ~/.local/bin/k8s-env
 
 ## Quick start
 
-Discover local Kubernetes runtimes and pick a namespace:
+An **env** is a saved target: a tool (microk8s, minikube, or a kubectl context), where it runs (locally or over SSH), and a namespace. Every command runs against the active env.
+
+Discover local Kubernetes runtimes, pick a namespace, and save it as an env:
 
 ```
-k8s ctx add
+k8s env add shop/dev
 ```
 
-This probes microk8s, minikube, and all kubectl contexts in parallel, then presents an interactive picker. Your selection is saved as a context in `~/.k8s-env/` and becomes the active one.
+This probes microk8s, minikube, and all kubectl contexts in parallel, then presents an interactive picker. The env is saved in `~/.k8s-env/` and becomes the active one.
 
 For remote hosts via SSH:
 
 ```
-k8s ctx add-remote myhost
+k8s env add-remote myhost shop/staging
 ```
 
-Show saved contexts, grouped by alias project prefix:
+Names are optional and unique. They use lowercase letters, digits, `-` and `_`, with an optional `project/` prefix to group envs per project. `k8s env` lists them, grouped by project:
 
 ```
-$ k8s ctx
-scratch       k8s on kind-local / scratch
+$ k8s env
+[k8s-kind-local-scratch]  k8s @ kind-local / scratch
 
 shop
-  dev         microk8s on local / shop
-  prod        k8s on gke-prod / shop (active)
+  dev                     microk8s @ local / shop
+  prod                    k8s @ gke-prod / shop (active)
+  staging                 microk8s @ myhost (ssh) / shop
 ```
 
-Switch between contexts with `k8s ctx set`.
-
-Give a context a unique alias to skip the interactive picker. Aliases use lowercase letters, digits, `-` and `_`, with an optional `project/` prefix to group environments per project:
+Each line reads `<tool> @ <kubectl context, host (ssh), or local> / <namespace>`. Unnamed envs show their generated key in brackets. Every command prints the same line as a banner, tagged with the env name (yellow when running over SSH):
 
 ```
-k8s ctx add shop/dev
-k8s ctx set shop/prod
-k8s ctx use shop/prod
+$ k8s pods
+[shop/prod] k8s @ gke-prod / shop
 ```
 
-Run a single command against another context without switching, with `-c` or the `K8S_ENV_CONTEXT` environment variable (`-c` wins):
+Switch envs by name (or pick interactively without one):
 
 ```
-k8s -c billing/prod pods
-export K8S_ENV_CONTEXT=shop/dev   # pin this shell to shop/dev
+k8s env set shop/dev
+```
+
+Run a single command against another env without switching, with `-e` or the `K8S_ENV` environment variable (`-e` wins):
+
+```
+k8s -e shop/prod pods
+export K8S_ENV=shop/dev   # pin this shell to shop/dev
 ```
 
 ## Configuration
 
-Contexts live in `~/.k8s-env/`:
+Envs live in `~/.k8s-env/`:
 
 ```
 ~/.k8s-env/
-  profiles/<name>.env    one file per context
-  active                 symlink to the active profile
+  envs/<key>.env    one file per env (key: <tool>-<context|host|local>-<namespace>)
+  active            symlink to the active env
 ```
 
-The directory is created with mode `0700` and profile files with `0600`. `k8s` refuses to run if `~/.k8s-env` is not owned by you or is accessible by group/others.
+The directory is created with mode `0700` and env files with `0600`. `k8s` refuses to run if `~/.k8s-env` is not owned by you or is accessible by group/others.
 
 ## Commands
 
-### Context
+### Environments
 
 | Command | Description |
 |---|---|
-| `ctx` | Show saved contexts |
-| `ctx add [alias]` | Add local k8s namespace as context |
-| `ctx add-remote [host] [alias]` | Add remote k8s namespace via SSH |
-| `ctx set [alias]` | Switch active context (by alias, or interactive picker) |
-| `ctx del [alias]` | Delete a saved context (by alias, or interactive picker) |
-| `ctx use [alias]` | Apply a context to kubectl config (by alias, or the active one) |
-| `ctx alias [alias]` | Set, change, or clear the alias on the active context |
+| `env` | List saved envs |
+| `env add [name]` | Add an env from a local namespace |
+| `env add-remote [host] [name]` | Add an env from a remote namespace via SSH |
+| `env set [name]` | Switch the active env (by name, or interactive picker) |
+| `env del [name]` | Delete a saved env (by name, or interactive picker) |
+| `env kubectl [name]` | Point your kubectl config (context + namespace) at an env (by name, or the active one) |
+| `env rename [name]` | Rename the current env (the active one, or the one given with `-e`), or clear its name |
 
 ### Inspection
 
@@ -152,7 +158,7 @@ Everything after `--` is passed to the pod verbatim, so its own flags are not pa
 
 | Flag | Description |
 |---|---|
-| `-c <alias>` | Use this context instead of the active one for this invocation (default: `$K8S_ENV_CONTEXT`) |
+| `-e <env>` | Use this env instead of the active one for this invocation (default: `$K8S_ENV`) |
 | `-n <namespace>` | Override the saved namespace for this invocation |
 | `-h, --help` | Show help (also works per-command: `k8s logs --help`) |
 
@@ -163,6 +169,22 @@ Everything after `--` is passed to the pod verbatim, so its own flags are not pa
 - **kubectl contexts** — all contexts from `kubectl config get-contexts`
 - **SSH** — any of the above routed through SSH to a remote host
 
+## Development
+
+Lint:
+
+```
+uvx pylint k8s_env/ tests/
+```
+
+The integration test runs every command against a throwaway [kind](https://kind.sigs.k8s.io/) cluster seeded with `assets/seed.yaml`. It is skipped by default and requires `docker`, `kind`, and `kubectl`:
+
+```
+K8S_ENV_IT=1 python3 -m unittest discover -s tests -v
+```
+
+Set `K8S_ENV_IT_KEEP=1` to keep the cluster between runs.
+
 ## Bash alternative
 
-A standalone Bash drop-in replacement is available in [`contrib/k8s`](contrib/) for systems where Python 3.10+ cannot be installed. It shares `~/.k8s-env/` with the Python version and covers the core commands, but does not manage multiple contexts or run parallel discovery. See [`contrib/README.md`](contrib/README.md) for details.
+A standalone Bash drop-in replacement is available in [`contrib/k8s`](contrib/) for systems where Python 3.10+ cannot be installed. It shares `~/.k8s-env/` with the Python version and covers the core commands, but only works with the active env and does not run parallel discovery. See [`contrib/README.md`](contrib/README.md) for details.
