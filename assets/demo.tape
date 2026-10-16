@@ -1,6 +1,6 @@
 # VHS tape for the k8s-env README demo.  Regenerate with: assets/record.sh
 #
-# record.sh seeds an isolated minikube cluster and exports a sandboxed
+# record.sh seeds an isolated kind cluster and exports a sandboxed
 # HOME / KUBECONFIG / PATH (as K8S_DEMO_* env vars) so nothing real is
 # recorded.  The hidden setup block below applies them before recording.
 #
@@ -10,26 +10,27 @@
 Output assets/demo.gif
 
 Set Shell bash
-Set FontSize 40
-Set Width 3200
-Set Height 1900
-Set Padding 50
+Set FontSize 20
+Set Width 1850
+Set Height 950
+Set Padding 25
 Set Framerate 10
 Set Theme "Catppuccin Mocha"
 Set TypingSpeed 25ms
 
 # Demo: add a project-scoped env, list envs grouped by project, list pods,
-# peek at another env with -e, tail filtered logs, exec into a pod (shell +
+# peek at another env with -e, tail filtered logs, follow logs across replicas, exec into a pod (shell +
 # one-off command), port-forward a service, glance at status, then show help.
 
 # --- sandbox setup (not shown) ----------------------------------------------
 # Pre-adds payments/dev so the grouped `k8s env` list has two projects.
+# kind's own local-path-storage namespace is picker entry 1.
 Hide
 Type 'export HOME="$K8S_DEMO_HOME" KUBECONFIG="$K8S_DEMO_KC" PATH="$K8S_DEMO_PATH"'  Enter
 Type `export PS1='\[\e[38;5;213m\]demo\[\e[0m\] \[\e[2m\]❯\[\e[0m\] '`  Enter
 Type "k8s env add payments/dev"  Enter
 Sleep 4s
-Type "1"  Enter
+Type "2"  Enter
 Sleep 1s
 Type "clear"  Enter
 Show
@@ -38,7 +39,7 @@ Sleep 500ms
 # --- 1) add an env under a project name, then list envs ---------------------
 Type `k8s env add shop/dev  # scan all clusters, pick a namespace, save it as shop/dev`  Sleep 1.5s  Enter
 Sleep 3s
-Type "2"                    Sleep 400ms  Enter
+Type "3"                    Sleep 400ms  Enter
 Sleep 2.5s
 Enter  Sleep 800ms
 Type `k8s env  # all saved envs, grouped by project`  Sleep 1.5s  Enter
@@ -61,6 +62,15 @@ Show
 Type `k8s logs cart --tail 8  # tail logs by fuzzy name — say "cart", skip the 20-char pod id`  Sleep 1.5s  Enter
 Sleep 4.5s
 
+# --- 3b) follow logs across both ledger replicas, interleaved ---------------
+Hide
+Type "clear"  Enter
+Show
+Type `k8s -e payments/dev logs ledger -f --tail 3  # follow every matching pod, color-coded and interleaved`  Sleep 1.5s  Enter
+Sleep 8s
+Ctrl+C
+Sleep 1.5s
+
 # --- 4) exec into a pod (filtered): a shell, then a one-off command ---------
 Hide
 Type "clear"  Enter
@@ -69,13 +79,13 @@ Type `k8s exec storefront  # shell into a pod by fuzzy name — asks if several 
 Sleep 2s
 Type "1"                    Sleep 400ms  Enter
 Sleep 1.5s
-Type `ls  # now we're inside the container`  Sleep 1s  Enter
+Type `ls /usr/share/nginx/html  # now we're inside the container`  Sleep 1s  Enter
 Sleep 2.5s
 Enter  Sleep 800ms
 Type `exit  # ...and back to the host`  Sleep 1s  Enter
 Sleep 2s
 Enter  Sleep 800ms
-Type `k8s exec storefront -- ls -la  # ...or run one command and return, no shell`  Sleep 1.5s  Enter
+Type `k8s exec storefront -- nginx -v  # ...or run one command and return, no shell`  Sleep 1.5s  Enter
 Sleep 1.5s
 Type "1"                    Sleep 400ms  Enter
 Sleep 3s

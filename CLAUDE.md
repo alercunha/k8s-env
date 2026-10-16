@@ -83,15 +83,16 @@ pyproject.toml       # Project metadata, pylint and pytest configuration
 
 ## Demo GIF
 
-`README.md` embeds `assets/demo.gif`. Regenerate it with `assets/record.sh` (requires `minikube`, `kubectl`, `vhs`, `ttyd`, `ffmpeg`). The script:
+`README.md` embeds `assets/demo.gif`. Regenerate it with `assets/record.sh` (requires `docker`, `kind`, `kubectl`, `vhs`, `ttyd`, `ffmpeg`). The script:
 
-- Starts an isolated minikube profile (`kdemo`), applies `assets/seed.yaml` (synthetic `shop`/`payments` namespaces with nginx/busybox workloads), and records `assets/demo.tape` with VHS.
-- Runs the recording under a sandboxed `HOME`/`KUBECONFIG`/`PATH` so no real cluster, kubectl context, or `~/.k8s-env` is shown or touched. The kubeconfig context is renamed to `demo` for the recording.
-- Snapshots `~/.kube/config` and the current context on entry and restores them on exit. This is required because `minikube start/stop/delete` mutate the real kubeconfig — on this setup `minikube stop` removes the `minikube` context entirely.
+- Creates a kind cluster (`kdemo`) with its own kubeconfig (never `~/.kube/config`), applies `assets/seed.yaml` (synthetic `shop`/`payments` namespaces with nginx/busybox workloads), records `assets/demo.tape` with VHS, and deletes the cluster on exit.
+- Runs the recording under a sandboxed `HOME`/`KUBECONFIG`/`PATH` (`PATH` holds only the `k8s` shim, `kubectl`, and `clear`) so no real cluster, kubectl context, or `~/.k8s-env` is shown or touched. The kubeconfig context is renamed to `demo` for the recording.
 
 Constraints baked into `demo.tape` (changing them tends to regress the output):
 
-- `Set Framerate 10` — at the gif resolution VHS drops frames at the default framerate, which compresses every `Sleep` and ruins the read pacing. Total runtime targets ~100s.
-- The hidden setup block pre-adds `payments/dev` so the grouped `k8s env` list and the `-e payments/dev` scene have a second env.
-- The minikube profile name is kept short (`kdemo`) because it becomes the node name in `kubectl get pods -o wide`; a long name overflows `Width` and wraps the table.
-- `Width` is sized so the widest line (`pods -o wide`, ~119 columns) fits without wrapping.
+- `Set Framerate 10` — at the gif resolution VHS drops frames at the default framerate, which compresses every `Sleep` and ruins the read pacing. Total runtime targets ~115s.
+- The hidden setup block pre-adds `payments/dev` so the grouped `k8s env` list and the `-e payments/dev` scene have a second env. kind's `local-path-storage` namespace is picker entry 1, so `payments` is 2 and `shop` is 3.
+- The kind cluster name is kept short (`kdemo`) because the node name (`kdemo-control-plane`) shows in `kubectl get pods -o wide`; a long name overflows `Width` and wraps the table.
+- `Width` is sized so the widest line (`pods -o wide`, ~134 columns) fits without wrapping.
+- `FontSize 20` at 1850×950 keeps gif encoding at ~2 min; font 40 at double the size takes ~10 min.
+- Exec scenes avoid listing `/`: under kind it shows `product_name`/`product_uuid` files.
