@@ -185,6 +185,15 @@ uv run pytest -m integration -v
 
 Set `K8S_ENV_IT_KEEP=1` to keep the cluster between runs.
 
+The `Dockerfile` runs the same pipeline with only docker installed locally:
+
+```
+docker build -t k8s-env .                        # lint, unit tests, wheel
+docker build --target dist -o dist .             # export the wheel to ./dist
+docker run --rm --network host \
+  -v /var/run/docker.sock:/var/run/docker.sock k8s-env   # integration test
+```
+
 ## Bash alternative
 
 A standalone Bash drop-in replacement is available in [`contrib/k8s`](contrib/) for systems where Python 3.10+ cannot be installed. It shares `~/.k8s-env/` with the Python version and covers the core commands, but only works with the active env and does not run parallel discovery. See [`contrib/README.md`](contrib/README.md) for details.
