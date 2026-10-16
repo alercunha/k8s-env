@@ -5,7 +5,8 @@ import re
 import shutil
 import sys
 
-ENV_FILE = '.k8s-env'
+CONFIG_DIR = os.path.join(os.path.expanduser('~'), '.k8s-env')
+ENV_VAR = 'K8S_ENV'
 CMD = os.path.basename(sys.argv[0])
 
 SYSTEM_NAMESPACES = frozenset({
@@ -13,12 +14,11 @@ SYSTEM_NAMESPACES = frozenset({
 })
 
 _VALIDATORS = {
-    'tool':      re.compile(r'^(microk8s|microk8s-ssh|minikube|minikube-ssh|k8s)$'),
+    'tool':      re.compile(r'^(microk8s|minikube|k8s)$'),
     'context':   re.compile(r'^[A-Za-z0-9._:@-]+$'),
     'namespace': re.compile(r'^[a-z0-9][-a-z0-9]*[a-z0-9]?$'),
     'host':      re.compile(r'^[A-Za-z0-9._@:-]+$'),
-    'profile':   re.compile(r'^[a-z0-9][-a-z0-9]*$'),
-    'alias':     re.compile(r'^[a-z0-9][-a-z0-9]*$'),
+    'name':      re.compile(r'^[a-z0-9][-_a-z0-9]*(/[a-z0-9][-_a-z0-9]*)?$'),
 }
 
 

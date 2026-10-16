@@ -9,12 +9,10 @@ from dataclasses import dataclass
 
 from k8s_env import service
 from k8s_env.args import first, handle_help, parse_args
-from k8s_env.context import AppContext
+from k8s_env.app import App
 from k8s_env.k8s import KubeCtl
-from k8s_env.profile import EnvEntry
 from k8s_env.service import Env
-from k8s_env.trust import trust, untrust
-from k8s_env.utils import CMD, validate
+from k8s_env.utils import CMD, ENV_VAR, validate
 
 # -- Colors -------------------------------------------------------------------
 
@@ -73,17 +71,11 @@ def open_url(url: str) -> None:
     print_warning(f'Could not open browser. Visit {url} manually.')
 
 
-def print_banner(ctx: AppContext) -> None:
-    k = ctx.kubectl
-    name = k.tool_name
-    ns = ctx.namespace
-    if k.ssh_host:
-        line = f'{_YELLOW}[{name} ssh]{_NC} host: {_BOLD}{k.ssh_host}{_NC} | namespace: {_BOLD}{ns}{_NC}'
-    elif k.context:
-        line = f'{_CYAN}[{name} remote]{_NC} context: {_BOLD}{k.context}{_NC} | namespace: {_BOLD}{ns}{_NC}'
-    else:
-        line = f'{_YELLOW}[{name} local]{_NC} namespace: {_BOLD}{ns}{_NC}'
-    print(line, file=sys.stderr)
+def print_banner(app: App) -> None:
+    # '[shop/dev] k8s @ gke-prod / shop'; the tag is yellow when kubectl runs over SSH
+    env = app.env
+    color = _YELLOW if env.ssh_host else _CYAN
+    print(f'{color}[{env.label}]{_NC} {_BOLD}{env.describe(app.namespace)}{_NC}', file=sys.stderr)
 
 
 def _filter(items: list, text: str, key=lambda x: x) -> list:
@@ -106,6 +98,24 @@ def print_filtered(output: str, filter_text: str) -> None:
 
 # -- Picker -------------------------------------------------------------------
 
+def print_grouped(
+    items: list[str], groups: list[str] | None = None, *,
+    numbered: bool = False, indent: str = '', file=sys.stdout,
+) -> None:
+    # Items under a header for each run of adjacent equal group names;
+    # items with an empty group name get no header and no extra indent.
+    current = ''
+    for i, item in enumerate(items):
+        group = groups[i] if groups else ''
+        if group != current:
+            if i:
+                print(file=file)
+            print(f'{indent}{_YELLOW}{group}{_NC}', file=file)
+            current = group
+        num = f'{_CYAN}{i + 1}){_NC} ' if numbered else ''
+        print(f'{indent}{"  " if group else ""}{num}{item}', file=file)
+
+
 def pick(
     title: str, items: list[str], *,
     groups: list[str] | None = None, auto: bool = False, multi: bool = False,
@@ -118,18 +128,9 @@ def pick(
         print(f'{_BOLD}{title}:{_NC} {items[0]}', file=sys.stderr)
         return [(0, items[0])]
 
-    # Display items, optionally grouped by adjacent group names (to stderr so
-    # stdout stays clean for piping)
+    # Display to stderr so stdout stays clean for piping
     print(f'{_BOLD}{title}:{_NC}', file=sys.stderr)
-    current_group = ''
-    indent = '    ' if groups else '  '
-    for i, item in enumerate(items):
-        if groups and groups[i] != current_group:
-            if current_group:
-                print(file=sys.stderr)
-            current_group = groups[i]
-            print(f'  {_YELLOW}{current_group}{_NC}', file=sys.stderr)
-        print(f'{indent}{_CYAN}{i + 1}){_NC} {item}', file=sys.stderr)
+    print_grouped(items, groups, numbered=True, indent='  ', file=sys.stderr)
     print(file=sys.stderr)
 
     if multi:
@@ -154,259 +155,211 @@ def pick(
     return selected
 
 
-# -- Context commands ---------------------------------------------------------
+# -- Env commands -------------------------------------------------------------
 
-def _ctx_list(ctx: AppContext) -> None:
-    entries = ctx.profiles.list()
-    if not entries:
-        print(f'{_DIM}No contexts saved. Run: {CMD} ctx add{_NC}')
+def _format_env(label: str, env: Env, active_key: str, width: int) -> str:
+    if env.key == active_key:
+        return f'{_GREEN}{label.ljust(width)}{env.describe()} (active){_NC}'
+    return f'{label.ljust(width)}{_DIM}{env.describe()}{_NC}'
+
+
+def _env_items(app: App) -> tuple[list[Env], list[str], list[str]]:
+    # (envs, display items, groups) for print_grouped/pick: 'shop/dev' is item 'dev' in
+    # group 'shop', unnamed envs show as '[key]'. Ungrouped sort first, named before
+    # unnamed. Grouped labels are 2 narrower to offset their indent, keeping details aligned.
+    rows = []
+    for env in app.store.list():
+        group, _, leaf = env.name.rpartition('/')
+        rows.append((group, leaf or f'[{env.key}]', env))
+    rows.sort(key=lambda r: (r[0], not r[2].name, r[1]))
+    pad = [2 if group else 0 for group, _, _ in rows]
+    width = max((len(label) + p for (_, label, _), p in zip(rows, pad)), default=0) + 2
+    active_key = app.store.active_key
+    items = [_format_env(label, env, active_key, width - p) for (_, label, env), p in zip(rows, pad)]
+    return [env for _, _, env in rows], items, [group for group, _, _ in rows]
+
+
+def _env_list(app: App) -> None:
+    envs, items, groups = _env_items(app)
+    if not envs:
+        print(f'{_DIM}No envs saved. Run: {CMD} env add{_NC}')
         return
-    active = ctx.profiles.active_name
-    for e in entries:
-        print(_format_entry(e, active))
+    print_grouped(items, groups)
 
 
-def _validate_alias(alias: str) -> str:
-    if alias:
+def _validate_name(name: str) -> str:
+    if name:
         try:
-            validate('alias', alias)
+            validate('name', name)
         except ValueError as e:
             raise SystemExit(str(e)) from None
-    return alias
+    return name
 
 
-def _ensure_alias(alias: str) -> str:
-    if not alias:
-        alias = _input('Alias (optional, enter to skip): ').strip()
-    return _validate_alias(alias)
+def _select_env(app: App, name: str, title: str) -> Env:
+    # Resolve by name when given, otherwise fall back to the interactive picker
+    if name:
+        return app.store.by_name(name)
+    envs, items, groups = _env_items(app)
+    return envs[pick(title, items, groups=groups)[0][0]]
 
 
-def _resolve_alias(ctx: AppContext, alias: str) -> EnvEntry:
-    entry = ctx.profiles.find_by_alias(alias)
-    if not entry:
-        raise SystemExit(f'No context with alias: {alias}')
-    return entry
+def _pick_and_add(app: App, found: list[Env], title: str, name: str) -> None:
+    labels = [env.namespace for env in found]
+    groups = [env.target for env in found]
+    env = found[pick(title, labels, groups=groups)[0][0]]
+    env.name = _validate_name(name or _input('Name (optional, enter to skip): ').strip())
+    app.store.add(env)
+    print()
+    print_status(f'Added {_BOLD}{env.label}{_NC}: {env.describe()}')
 
 
-def _select_context(ctx: AppContext, alias: str, title: str) -> EnvEntry:
-    # Resolve by alias when given, otherwise fall back to the interactive picker
-    if alias:
-        return _resolve_alias(ctx, alias)
-    entries = ctx.profiles.list()
-    active = ctx.profiles.active_name
-    items = [_format_entry(e, active) for e in entries]
-    return entries[pick(title, items)[0][0]]
-
-
-def _ctx_add(ctx: AppContext, args: list[str]) -> None:
-    entries = service.discover_local()
-    if not entries:
+def _env_add(app: App, args: list[str]) -> None:
+    found = service.discover_local()
+    if not found:
         raise SystemExit('No namespaces found (checked microk8s, minikube, and kubectl contexts)')
-
-    labels = [e.namespace for e in entries]
-    groups = [e.group for e in entries]
-    selected = entries[pick('Available namespaces', labels, groups=groups)[0][0]]
-
-    alias = _ensure_alias(first(args))
-    env = Env(tool=selected.tool, context=selected.context, namespace=selected.namespace, alias=alias)
-    ctx.profiles.save(env)
-    print()
-    print_status(f'Set to {_BOLD}{selected.group}{_NC} namespace: {_BOLD}{selected.namespace}{_NC}')
+    _pick_and_add(app, found, 'Available namespaces', first(args))
 
 
-def _ctx_add_remote(ctx: AppContext, args: list[str]) -> None:
-    host = first(args)
-    alias_arg = args[1] if len(args) > 1 else ''
+def _env_add_remote(app: App, args: list[str]) -> None:
+    host = first(args) or _input('Remote host: ').strip()
     if not host:
-        host = _input('Remote host: ').strip()
-        if not host:
-            raise SystemExit('No host provided')
-
-    entries = service.discover_remote(host)
-    if not entries:
+        raise SystemExit('No host provided')
+    found = service.discover_remote(host)
+    if not found:
         raise SystemExit(f'No custom namespaces found on {host} (checked microk8s and minikube)')
-
-    labels = [e.namespace for e in entries]
-    groups = [e.tool for e in entries]
-    selected = entries[pick(f'Namespaces on {host}', labels, groups=groups)[0][0]]
-
-    alias = _ensure_alias(alias_arg)
-    env = Env(tool=selected.tool, ssh_host=host, namespace=selected.namespace, alias=alias)
-    ctx.profiles.save(env)
-    print()
-    ns = selected.namespace
-    print_status(f'Set to {_YELLOW}{selected.tool} ssh{_NC} host: {_BOLD}{host}{_NC} namespace: {_BOLD}{ns}{_NC}')
+    _pick_and_add(app, found, f'Namespaces on {host}', args[1] if len(args) > 1 else '')
 
 
-def _ctx_set(ctx: AppContext, alias: str) -> None:
-    entries = ctx.profiles.list()
-    if not entries:
-        raise SystemExit(f'No contexts saved. Run: {CMD} ctx add')
-    if not alias and len(entries) == 1:
-        print_status(f'Already on the only context: {_BOLD}{entries[0].name}{_NC}')
+def _env_set(app: App, name: str) -> None:
+    envs = app.store.list()
+    if not envs:
+        raise SystemExit(f'No envs saved. Run: {CMD} env add')
+    if not name and len(envs) == 1:
+        print_status(f'Already on the only env: {_BOLD}{envs[0].label}{_NC}')
         return
-    selected = _select_context(ctx, alias, 'Activate context')
-    if selected.name == ctx.profiles.active_name:
-        print_status(f'Already on context {_BOLD}{selected.name}{_NC}')
+    selected = _select_env(app, name, 'Activate env')
+    if selected.key == app.store.active_key:
+        print_status(f'Already on {_BOLD}{selected.label}{_NC}')
         return
-    ctx.profiles.activate(selected.name)
+    app.store.activate(selected.key)
     print()
-    print_status(f'Activated context {_BOLD}{selected.name}{_NC}')
+    print_status(f'Switched to {_BOLD}{selected.label}{_NC}')
+    if app.env_override:
+        print_warning(f'-e / {ENV_VAR} ({app.env_override}) still takes precedence')
 
 
-def _ctx_del(ctx: AppContext, alias: str) -> None:
-    if not ctx.profiles.list():
-        raise SystemExit('No contexts saved')
-    selected = _select_context(ctx, alias, 'Delete context')
-    new_active = ctx.profiles.delete(selected.name)
+def _env_del(app: App, name: str) -> None:
+    if not app.store.list():
+        raise SystemExit('No envs saved')
+    selected = _select_env(app, name, 'Delete env')
+    new_active = app.store.delete(selected.key)
     print()
-    print_status(f'Deleted context {_BOLD}{selected.name}{_NC}')
+    print_status(f'Deleted {_BOLD}{selected.label}{_NC}')
     if new_active:
-        print_status(f'Switched to context {_BOLD}{new_active.name}{_NC}')
+        print_status(f'Switched to {_BOLD}{new_active.label}{_NC}')
 
 
-def _ctx_use(ctx: AppContext, alias: str) -> None:
-    # Resolve the target up front, but don't mutate the active context until
+def _env_kubectl(app: App, name: str) -> None:
+    # Resolve the target up front, but don't mutate the active env until
     # the user confirms — aborting must leave everything untouched.
-    selected = _resolve_alias(ctx, alias) if alias else None
-    env = selected.env if selected else ctx.env
-    if env.tool not in ('k8s', 'k8s-ssh'):
+    selected = app.store.by_name(name) if name else None
+    env = selected or app.env
+    if env.tool != 'k8s':
         print_status(f'{env.tool} does not use kubectl contexts — nothing to do.')
         return
 
-    context_name = env.context
-    ns = ctx.ns_override or env.namespace
+    ns = app.ns_override or env.namespace
     print('This will set your kubectl config to:')
-    print(f'  context:   {_BOLD}{context_name}{_NC}')
+    print(f'  context:   {_BOLD}{env.context}{_NC}')
     print(f'  namespace: {_BOLD}{ns}{_NC}')
     raw = _input('\nProceed? [y/N]: ').strip().lower()
     if raw != 'y':
         raise SystemExit('Aborted')
 
-    if selected and selected.name != ctx.profiles.active_name:
-        ctx.profiles.activate(selected.name)
-    subprocess.run(['kubectl', 'config', 'use-context', context_name], check=True)
-    subprocess.run(['kubectl', 'config', 'set-context', context_name,
+    if selected and selected.key != app.store.active_key:
+        app.store.activate(selected.key)
+    subprocess.run(['kubectl', 'config', 'use-context', env.context], check=True)
+    subprocess.run(['kubectl', 'config', 'set-context', env.context,
                      '--namespace', ns], check=True)
     print()
-    print_status(f'kubectl now using context {_BOLD}{context_name}{_NC} / namespace {_BOLD}{ns}{_NC}')
+    print_status(f'kubectl now using context {_BOLD}{env.context}{_NC} / namespace {_BOLD}{ns}{_NC}')
 
 
-def _ctx_alias(ctx: AppContext, alias: str) -> None:
-    env = ctx.env
-    name = ctx.profiles.active_name
-    if not alias:
-        current = f' (current: {env.alias})' if env.alias else ''
-        alias = _input(f'Alias for {name}{current}, enter to clear: ').strip()
-    env.alias = _validate_alias(alias)
-    ctx.profiles.save(env)
+def _env_rename(app: App, name: str) -> None:
+    env = app.env
+    old = env.label
+    if not name:
+        name = _input(f'New name for {old}, enter to clear: ').strip()
+    env.name = _validate_name(name)
+    app.store.save(env)
     print()
-    if env.alias:
-        print_status(f'Set alias {_BOLD}{env.alias}{_NC} on {_BOLD}{name}{_NC}')
+    if env.name:
+        print_status(f'Renamed {_BOLD}{old}{_NC} to {_BOLD}{env.name}{_NC}')
     else:
-        print_status(f'Cleared alias on {_BOLD}{name}{_NC}')
+        print_status(f'Cleared name on {_BOLD}{old}{_NC}')
 
 
-_CTX_COMMANDS = {
-    '':           lambda ctx, _args: _ctx_list(ctx),
-    'add':        lambda ctx, args:  _ctx_add(ctx, args),
-    'add-remote': lambda ctx, args:  _ctx_add_remote(ctx, args),
-    'set':        lambda ctx, args:  _ctx_set(ctx, first(args)),
-    'del':        lambda ctx, args:  _ctx_del(ctx, first(args)),
-    'use':        lambda ctx, args:  _ctx_use(ctx, first(args)),
-    'alias':      lambda ctx, args:  _ctx_alias(ctx, first(args)),
+_ENV_COMMANDS = {
+    '':           lambda app, _args: _env_list(app),
+    'add':        lambda app, args:  _env_add(app, args),
+    'add-remote': lambda app, args:  _env_add_remote(app, args),
+    'set':        lambda app, args:  _env_set(app, first(args)),
+    'del':        lambda app, args:  _env_del(app, first(args)),
+    'kubectl':    lambda app, args:  _env_kubectl(app, first(args)),
+    'rename':     lambda app, args:  _env_rename(app, first(args)),
 }
 
 
-def cmd_ctx(ctx: AppContext, args: list[str]) -> None:
+def cmd_env(app: App, args: list[str]) -> None:
     sub = first(args)
-    handler = _CTX_COMMANDS.get(sub)
+    handler = _ENV_COMMANDS.get(sub)
     if not handler:
-        raise SystemExit(f'Unknown ctx subcommand: {sub}. Use: add, add-remote, set, del, use, alias')
-    ctx.check_trust()
-    handler(ctx, args[1:])
-
-
-def _format_entry(e: EnvEntry, active: str) -> str:
-    env = e.env
-    location = env.ssh_host or env.context or 'local'
-    alias = f' ({env.alias})' if env.alias else ''
-    if e.name == active:
-        return f'{_GREEN}[{e.name}]{alias}{_NC} {env.tool} on {location} / {env.namespace} {_GREEN}(active){_NC}'
-    return f'{_DIM}[{e.name}]{alias} {env.tool} on {location} / {env.namespace}{_NC}'
+        raise SystemExit(f'Unknown env subcommand: {sub}. Use: add, add-remote, set, del, kubectl, rename')
+    handler(app, args[1:])
 
 
 # -- Other commands -----------------------------------------------------------
 
-def _env_summary(env: Env) -> str:
-    parts = [env.tool]
-    if env.ssh_host:
-        parts.append(f'on {_YELLOW}{env.ssh_host}{_NC}')
-    elif env.context:
-        parts.append(f'on context {env.context}')
-    else:
-        parts.append('on local')
-    parts.append(f'namespace {env.namespace}')
-    return ' / '.join(parts)
+def cmd_namespaces(app: App) -> None:
+    print_banner(app)
+    print(app.kubectl.get_namespaces_all(), end='')
 
 
-def cmd_allow(ctx: AppContext) -> None:
-    print(f'{_BOLD}Trusting .k8s-env:{_NC}')
-    for entry in ctx.profiles.list():
-        print(f'  {_env_summary(entry.env)}')
-    raw = _input('\nAllow? [y/N]: ').strip().lower()
-    if raw != 'y':
-        raise SystemExit('Aborted')
-    for entry in ctx.profiles.list():
-        trust(entry.path)
-    print_status('Trusted .k8s-env in current directory')
-
-
-def cmd_deny(ctx: AppContext) -> None:
-    for entry in ctx.profiles.list():
-        untrust(entry.path)
-    print_status('Removed trust for .k8s-env in current directory')
-
-
-def cmd_namespaces(ctx: AppContext) -> None:
-    print_banner(ctx)
-    print(ctx.kubectl.get_namespaces_all(), end='')
-
-
-def cmd_pods(ctx: AppContext, filter_text: str) -> None:
-    print_banner(ctx)
-    ns = ctx.namespace
+def cmd_pods(app: App, filter_text: str) -> None:
+    print_banner(app)
+    ns = app.namespace
     print_status(f'Pods in {_BOLD}{ns}{_NC}')
-    print_filtered(ctx.kubectl.get_pods(ns), filter_text)
+    print_filtered(app.kubectl.get_pods(ns), filter_text)
 
 
-def cmd_services(ctx: AppContext, filter_text: str) -> None:
-    print_banner(ctx)
-    ns = ctx.namespace
+def cmd_services(app: App, filter_text: str) -> None:
+    print_banner(app)
+    ns = app.namespace
     print_status(f'Services in {_BOLD}{ns}{_NC}')
-    print_filtered(ctx.kubectl.get_services(ns), filter_text)
+    print_filtered(app.kubectl.get_services(ns), filter_text)
 
 
-def cmd_secrets(ctx: AppContext, filter_text: str) -> None:
-    print_banner(ctx)
-    ns = ctx.namespace
+def cmd_secrets(app: App, filter_text: str) -> None:
+    print_banner(app)
+    ns = app.namespace
     print_status(f'Secrets in {_BOLD}{ns}{_NC} {_DIM}(names only){_NC}')
-    print_filtered(ctx.kubectl.get_secrets(ns), filter_text)
+    print_filtered(app.kubectl.get_secrets(ns), filter_text)
 
 
-def cmd_cronjobs(ctx: AppContext, filter_text: str) -> None:
-    print_banner(ctx)
-    ns = ctx.namespace
+def cmd_cronjobs(app: App, filter_text: str) -> None:
+    print_banner(app)
+    ns = app.namespace
     print_status(f'CronJobs in {_BOLD}{ns}{_NC}')
-    print_filtered(ctx.kubectl.get_cronjobs(ns), filter_text)
+    print_filtered(app.kubectl.get_cronjobs(ns), filter_text)
 
 
-def cmd_events(ctx: AppContext, filter_text: str) -> None:
-    print_banner(ctx)
-    ns = ctx.namespace
+def cmd_events(app: App, filter_text: str) -> None:
+    print_banner(app)
+    ns = app.namespace
     print_status(f'Recent events in {_BOLD}{ns}{_NC}')
     # Show last 30 lines of sorted events
-    output = ctx.kubectl.get_events(ns)
+    output = app.kubectl.get_events(ns)
     lines = output.rstrip('\n').splitlines()
     trimmed = '\n'.join(lines[:1] + lines[-30:]) if len(lines) > 31 else output
     print_filtered(trimmed, filter_text)
@@ -450,14 +403,14 @@ def _follow_multi(k: KubeCtl, pods: list[str], ns: str, tail: int) -> None:
                 proc.kill()
 
 
-def cmd_logs(ctx: AppContext, args: list[str]) -> None:
+def cmd_logs(app: App, args: list[str]) -> None:
     follow, tail, rest = parse_args(args, {'-f': False, '--tail': 20})
     if tail == 0:
         raise SystemExit('--tail must be a positive number or -1 for all lines')
     filter_text = first(rest)
-    print_banner(ctx)
-    ns = ctx.namespace
-    k = ctx.kubectl
+    print_banner(app)
+    ns = app.namespace
+    k = app.kubectl
 
     pods = k.list_pods(ns)
     if filter_text:
@@ -482,11 +435,11 @@ def cmd_logs(ctx: AppContext, args: list[str]) -> None:
                 print(f'{_DIM}(no logs){_NC}')
 
 
-def cmd_configmaps(ctx: AppContext, filter_text: str = '') -> None:
-    print_banner(ctx)
-    ns = ctx.namespace
+def cmd_configmaps(app: App, filter_text: str = '') -> None:
+    print_banner(app)
+    ns = app.namespace
 
-    cms = ctx.kubectl.list_configmaps(ns)
+    cms = app.kubectl.list_configmaps(ns)
     if filter_text:
         cms = _filter(cms, filter_text)
     if not cms:
@@ -503,10 +456,10 @@ def cmd_configmaps(ctx: AppContext, filter_text: str = '') -> None:
     if not raw.isdigit() or not 1 <= int(raw) <= len(cms):
         raise SystemExit(f'Invalid selection: {raw}')
     print()
-    print(ctx.kubectl.get_configmap_yaml(cms[int(raw) - 1], ns), end='')
+    print(app.kubectl.get_configmap_yaml(cms[int(raw) - 1], ns), end='')
 
 
-def cmd_exec(ctx: AppContext, args: list[str]) -> None:
+def cmd_exec(app: App, args: list[str]) -> None:
     # Everything after '--' is a command to run in the pod; without it, open a shell
     if '--' in args:
         sep = args.index('--')
@@ -514,9 +467,9 @@ def cmd_exec(ctx: AppContext, args: list[str]) -> None:
     else:
         filter_text, command = first(args), []
 
-    print_banner(ctx)
-    ns = ctx.namespace
-    k = ctx.kubectl
+    print_banner(app)
+    ns = app.namespace
+    k = app.kubectl
 
     pods = k.list_pods(ns)
     if filter_text:
@@ -540,9 +493,9 @@ def _pick_service(pairs: list[tuple[str, str]], title: str, port_label: str) -> 
     return pairs[idx]
 
 
-def _do_port_forward(ctx: AppContext, svc_name: str, svc_port: str) -> None:
+def _do_port_forward(app: App, svc_name: str, svc_port: str) -> None:
     # Look up saved local port from env
-    env = ctx.env
+    env = app.env
     pf_key = f'pf.{svc_name}.{svc_port}'
     saved_port = env.port_forwards.get(pf_key, '')
     default_port = saved_port or svc_port
@@ -554,16 +507,16 @@ def _do_port_forward(ctx: AppContext, svc_name: str, svc_port: str) -> None:
 
     # Save the port mapping
     env.port_forwards[pf_key] = local_port
-    ctx.profiles.save(env)
+    app.store.save(env)
 
     print_status(f'Forwarding localhost:{local_port} → svc/{svc_name}:{svc_port} (Ctrl+C to stop)')
-    ctx.kubectl.port_forward(svc_name, ctx.namespace, local_port, svc_port)
+    app.kubectl.port_forward(svc_name, app.namespace, local_port, svc_port)
 
 
-def cmd_restart(ctx: AppContext, filter_text: str) -> None:
-    print_banner(ctx)
-    ns = ctx.namespace
-    k = ctx.kubectl
+def cmd_restart(app: App, filter_text: str) -> None:
+    print_banner(app)
+    ns = app.namespace
+    k = app.kubectl
 
     deployments = k.list_deployments(ns)
     if filter_text:
@@ -583,52 +536,52 @@ def cmd_restart(ctx: AppContext, filter_text: str) -> None:
     print_status('Done')
 
 
-def cmd_port_forward(ctx: AppContext, filter_text: str = '') -> None:
-    print_banner(ctx)
-    if ctx.kubectl.ssh_host:
+def cmd_port_forward(app: App, filter_text: str = '') -> None:
+    print_banner(app)
+    if app.kubectl.ssh_host:
         raise SystemExit('port-forward is not supported over SSH sessions')
 
-    pairs = ctx.kubectl.list_services_with_ports(ctx.namespace)
+    pairs = app.kubectl.list_services_with_ports(app.namespace)
     if filter_text:
         pairs = _filter(pairs, filter_text, key=lambda x: x[0])
     if not pairs:
-        print_warning(f'No services found in {ctx.namespace}')
+        print_warning(f'No services found in {app.namespace}')
         return
 
-    svc_name, svc_port = _pick_service(pairs, f'Services in {ctx.namespace}', 'port')
-    _do_port_forward(ctx, svc_name, svc_port)
+    svc_name, svc_port = _pick_service(pairs, f'Services in {app.namespace}', 'port')
+    _do_port_forward(app, svc_name, svc_port)
 
 
-def cmd_app(ctx: AppContext, filter_text: str = '') -> None:
-    if ctx.kubectl.ssh_host:
+def cmd_app(app: App, filter_text: str = '') -> None:
+    if app.kubectl.ssh_host:
         raise SystemExit('app is not supported over SSH sessions')
 
-    if ctx.env.tool == 'minikube':
+    if app.env.tool == 'minikube':
         print_warning("minikube doesn't expose NodePorts on localhost — using port-forward instead")
-        cmd_port_forward(ctx, filter_text)
+        cmd_port_forward(app, filter_text)
         return
 
-    print_banner(ctx)
-    pairs = ctx.kubectl.list_nodeport_services(ctx.namespace)
+    print_banner(app)
+    pairs = app.kubectl.list_nodeport_services(app.namespace)
     if filter_text:
         pairs = _filter(pairs, filter_text, key=lambda x: x[0])
     if not pairs:
-        print_warning(f'No NodePort services found in {ctx.namespace}')
+        print_warning(f'No NodePort services found in {app.namespace}')
         return
 
-    _, node_port = _pick_service(pairs, f'NodePort services in {ctx.namespace}', 'nodePort')
+    _, node_port = _pick_service(pairs, f'NodePort services in {app.namespace}', 'nodePort')
     url = f'http://localhost:{node_port}'
     print_status(f'Opening {_BOLD}{url}{_NC}')
     open_url(url)
 
 
-def cmd_dashboard(ctx: AppContext, args: list[str]) -> None:
+def cmd_dashboard(app: App, args: list[str]) -> None:
     new_token, _ = parse_args(args, {'-t': False})
 
-    if ctx.kubectl.ssh_host:
+    if app.kubectl.ssh_host:
         raise SystemExit('dashboard is not supported over SSH sessions')
 
-    k = ctx.kubectl
+    k = app.kubectl
     ns = k.find_namespace_exact('headlamp')
     if not ns:
         raise SystemExit('Headlamp namespace not found')
@@ -649,25 +602,23 @@ def cmd_dashboard(ctx: AppContext, args: list[str]) -> None:
     open_url(url)
 
 
-def cmd_describe(ctx: AppContext, arg: str) -> None:
-    print_banner(ctx)
-    ns = ctx.namespace
-
-    if not arg:
-        resources = ctx.kubectl.list_resources(ns)
-        if not resources:
-            print_warning(f'No resources found in {ns}')
-            return
-        arg = pick(f'Resources in {ns}', resources, auto=True)[0][1]
-    print(ctx.kubectl.describe(arg, ns), end='')
+def cmd_describe(app: App, filter_text: str) -> None:
+    print_banner(app)
+    ns = app.namespace
+    resources = _filter(app.kubectl.list_resources(ns), filter_text)
+    if not resources:
+        print_warning(f'No resources found in {ns}')
+        return
+    selected = pick(f'Resources in {ns}', resources, auto=True)[0][1]
+    print(app.kubectl.describe(selected, ns), end='')
 
 
-def cmd_status(ctx: AppContext) -> None:
-    print_banner(ctx)
-    ns = ctx.namespace
+def cmd_status(app: App) -> None:
+    print_banner(app)
+    ns = app.namespace
     print()
 
-    output = ctx.kubectl.get_resources_summary(ns)
+    output = app.kubectl.get_resources_summary(ns)
     lines = output.strip().splitlines()
 
     # Count resources by type prefix
@@ -708,25 +659,23 @@ class _Cmd:
     options: tuple[tuple[str, str], ...] = ()       # (flag, description) pairs
     aliases: tuple[str, ...] = ()                   # short forms
     forms: tuple[str, ...] = ()                     # synopsis lines for --help (default: name+args)
-    subcommands: tuple[tuple[str, str], ...] = ()   # (usage, summary) — ctx only
+    subcommands: tuple[tuple[str, str], ...] = ()   # (usage, summary) — env only
 
 
-_GROUPS = ('Context', 'Inspection', 'Actions')
+_GROUPS = ('Environments', 'Inspection', 'Actions')
 
 # Single source of truth for both the overview (show_help) and per-command help.
 _COMMANDS_META = {
-    # Context
-    'ctx': _Cmd('Context', 'Manage saved contexts (shows them with no subcommand)', subcommands=(
-        ('ctx',                   'Show saved contexts'),
-        ('ctx add [alias]',       'Add local k8s namespace as context'),
-        ('ctx add-remote [host]', 'Add remote k8s namespace via SSH'),
-        ('ctx set [alias]',       'Switch active context'),
-        ('ctx del [alias]',       'Delete a saved context'),
-        ('ctx use [alias]',       'Apply active context to kubectl config'),
-        ('ctx alias [alias]',     'Set/clear the alias on the active context'),
+    # Environments
+    'env': _Cmd('Environments', 'Manage saved envs (lists them with no subcommand)', subcommands=(
+        ('env',                          'List saved envs'),
+        ('env add [name]',               'Add an env from a local namespace'),
+        ('env add-remote [host] [name]', 'Add an env from a remote namespace via SSH'),
+        ('env set [name]',               'Switch the active env'),
+        ('env del [name]',               'Delete a saved env'),
+        ('env kubectl [name]',           'Point kubectl config at an env (default: active)'),
+        ('env rename [name]',            'Rename the current env (active, or -e), or clear its name'),
     )),
-    'allow': _Cmd('Context', 'Trust .k8s-env in current directory'),
-    'deny':  _Cmd('Context', 'Remove trust for .k8s-env in current directory'),
     # Inspection
     'pods':       _Cmd('Inspection', 'List pods (filter by name)', args='[filter]'),
     'logs':       _Cmd('Inspection', 'Show log output for pods in the current namespace',
@@ -741,7 +690,8 @@ _COMMANDS_META = {
     'secrets':    _Cmd('Inspection', 'List secret names', args='[filter]'),
     'cronjobs':   _Cmd('Inspection', 'List cronjobs', args='[filter]', aliases=('cj',)),
     'status':     _Cmd('Inspection', 'Show cluster and namespace stats', aliases=('st',)),
-    'describe':   _Cmd('Inspection', 'Describe a resource (picker if omitted)', args='[resource]', aliases=('desc',)),
+    'describe':   _Cmd('Inspection', 'Describe a resource (picker when several match)', args='[filter]',
+                       aliases=('desc',)),
     # Actions
     'exec':         _Cmd('Actions', 'Open a shell in a pod, or run a command after --', args='[filter]',
                          aliases=('sh',), forms=('exec [filter]', 'exec [filter] -- cmd')),
@@ -761,7 +711,7 @@ def _label(name: str, c: _Cmd) -> str:
 
 
 def _rows() -> list[tuple[str, str, str]]:
-    # Flatten the table into (group, label, summary) rows; ctx expands to its subcommands.
+    # Flatten the table into (group, label, summary) rows; env expands to its subcommands.
     rows: list[tuple[str, str, str]] = []
     for name, c in _COMMANDS_META.items():
         if c.subcommands:
@@ -790,7 +740,7 @@ def show_help() -> None:
     lines = [
         f'{b}{CMD}{n} — Kubernetes environment helper',
         '',
-        f'{b}Usage:{n} {CMD} <command> [args] [-n namespace]',
+        f'{b}Usage:{n} {CMD} <command> [args] [-e env] [-n namespace]',
         '',
     ]
     width = max(len(label) for _, label, _ in rows) + 2
@@ -801,6 +751,7 @@ def show_help() -> None:
         lines.append('')
     lines.append(f'{b}Options:{n}')
     lines += [f'  {left.ljust(width)}{right}' for left, right in (
+        ('-e <env>', f'Use this env instead of the active one (default: ${ENV_VAR})'),
         ('-n <namespace>', 'Override saved namespace'),
         ('-h, --help', 'Show this help'),
     )]
@@ -834,36 +785,34 @@ def _print_help(command: str) -> None:
 # -- Main ---------------------------------------------------------------------
 
 _COMMANDS = {
-    # Context
-    'ctx':          lambda ctx, args:  cmd_ctx(ctx, args),
-    'allow':        lambda ctx, _args: cmd_allow(ctx),
-    'deny':         lambda ctx, _args: cmd_deny(ctx),
+    # Environments
+    'env':          lambda app, args:  cmd_env(app, args),
     # Inspection
-    'pods':         lambda ctx, args:  cmd_pods(ctx, first(args)),
-    'logs':         lambda ctx, args:  cmd_logs(ctx, args),
-    'log':          lambda ctx, args:  cmd_logs(ctx, args),
-    'services':     lambda ctx, args:  cmd_services(ctx, first(args)),
-    'svc':          lambda ctx, args:  cmd_services(ctx, first(args)),
-    'namespaces':   lambda ctx, _args: cmd_namespaces(ctx),
-    'ns':           lambda ctx, _args: cmd_namespaces(ctx),
-    'events':       lambda ctx, args:  cmd_events(ctx, first(args)),
-    'configmaps':   lambda ctx, args:  cmd_configmaps(ctx, first(args)),
-    'cm':           lambda ctx, args:  cmd_configmaps(ctx, first(args)),
-    'secrets':      lambda ctx, args:  cmd_secrets(ctx, first(args)),
-    'cronjobs':     lambda ctx, args:  cmd_cronjobs(ctx, first(args)),
-    'cj':           lambda ctx, args:  cmd_cronjobs(ctx, first(args)),
-    'status':       lambda ctx, _args: cmd_status(ctx),
-    'st':           lambda ctx, _args: cmd_status(ctx),
-    'describe':     lambda ctx, args:  cmd_describe(ctx, first(args)),
-    'desc':         lambda ctx, args:  cmd_describe(ctx, first(args)),
+    'pods':         lambda app, args:  cmd_pods(app, first(args)),
+    'logs':         lambda app, args:  cmd_logs(app, args),
+    'log':          lambda app, args:  cmd_logs(app, args),
+    'services':     lambda app, args:  cmd_services(app, first(args)),
+    'svc':          lambda app, args:  cmd_services(app, first(args)),
+    'namespaces':   lambda app, _args: cmd_namespaces(app),
+    'ns':           lambda app, _args: cmd_namespaces(app),
+    'events':       lambda app, args:  cmd_events(app, first(args)),
+    'configmaps':   lambda app, args:  cmd_configmaps(app, first(args)),
+    'cm':           lambda app, args:  cmd_configmaps(app, first(args)),
+    'secrets':      lambda app, args:  cmd_secrets(app, first(args)),
+    'cronjobs':     lambda app, args:  cmd_cronjobs(app, first(args)),
+    'cj':           lambda app, args:  cmd_cronjobs(app, first(args)),
+    'status':       lambda app, _args: cmd_status(app),
+    'st':           lambda app, _args: cmd_status(app),
+    'describe':     lambda app, args:  cmd_describe(app, first(args)),
+    'desc':         lambda app, args:  cmd_describe(app, first(args)),
     # Actions
-    'exec':         lambda ctx, args:  cmd_exec(ctx, args),
-    'sh':           lambda ctx, args:  cmd_exec(ctx, args),
-    'restart':      lambda ctx, args:  cmd_restart(ctx, first(args)),
-    'port-forward': lambda ctx, args:  cmd_port_forward(ctx, first(args)),
-    'pf':           lambda ctx, args:  cmd_port_forward(ctx, first(args)),
-    'app':          lambda ctx, args:  cmd_app(ctx, first(args)),
-    'dashboard':    lambda ctx, args:  cmd_dashboard(ctx, args),
+    'exec':         lambda app, args:  cmd_exec(app, args),
+    'sh':           lambda app, args:  cmd_exec(app, args),
+    'restart':      lambda app, args:  cmd_restart(app, first(args)),
+    'port-forward': lambda app, args:  cmd_port_forward(app, first(args)),
+    'pf':           lambda app, args:  cmd_port_forward(app, first(args)),
+    'app':          lambda app, args:  cmd_app(app, first(args)),
+    'dashboard':    lambda app, args:  cmd_dashboard(app, args),
 }
 
 # Dispatch (_COMMANDS) and help (_COMMANDS_META + _ALIASES) are separate
@@ -879,7 +828,10 @@ def main() -> None:
     sep = argv.index('--') if '--' in argv else -1
     head, passthrough = (argv[:sep], argv[sep:]) if sep >= 0 else (argv, [])
 
-    ns_override, positional = parse_args(head, {'-n': ''})
+    env_override, ns_override, positional = parse_args(head, {
+        '-e': os.environ.get(ENV_VAR, ''),
+        '-n': '',
+    })
 
     if not positional:
         show_help()
@@ -894,7 +846,7 @@ def main() -> None:
     if handle_help(positional, lambda: _print_help(command)):
         sys.exit(0)
 
-    ctx = AppContext(ns_override=ns_override)
+    app = App(env_override=env_override, ns_override=ns_override)
     try:
         handler = _COMMANDS.get(command)
         if not handler:
@@ -902,7 +854,7 @@ def main() -> None:
             print()
             show_help()
             sys.exit(1)
-        handler(ctx, args)
+        handler(app, args)
     except KeyboardInterrupt:
         print()
     except RuntimeError as e:

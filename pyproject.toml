@@ -1,6 +1,6 @@
 [project]
 name = "k8s-env"
-version = "0.4.0"
+version = "1.0.0"
 description = "Kubernetes environment manager"
 requires-python = ">=3.10"
 
@@ -25,3 +25,12 @@ disable = [
     "unnecessary-lambda",
     "subprocess-run-check",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
+
+[tool.pytest.ini_options]
+markers = ["integration: end-to-end test against a kind cluster (needs docker, kind, kubectl)"]
+addopts = "-m 'not integration'"

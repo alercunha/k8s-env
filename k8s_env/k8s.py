@@ -142,12 +142,17 @@ class KubeCtl(ABC):
         return self.run('describe', resource, '-n', namespace, timeout=timeout)
 
     def list_resources(self, namespace: str, timeout: int | None = None) -> list[str]:
-        # List common resource names for interactive picker
+        # Common resources as 'kind/name' for the picker; the API group is dropped
+        # ('deployment.apps/x' -> 'deployment/x') so filters match what users type
         out = self.run(
             'get', 'pods,deployments,services,configmaps', '-n', namespace,
             '--no-headers', '-o', 'name', timeout=timeout,
         )
-        return [r for r in out.strip().splitlines() if r]
+        resources = []
+        for line in out.strip().splitlines():
+            kind, _, name = line.partition('/')
+            resources.append(f'{kind.split(".")[0]}/{name}')
+        return resources
 
     def get_resources_summary(self, namespace: str, timeout: int | None = None) -> str:
         return self.run(
@@ -317,11 +322,9 @@ class SshKubeCtl(KubeCtl):
 # -- Factory -----------------------------------------------------------------
 
 _TOOLS: dict[str, type[KubeCtl]] = {
-    'microk8s':     MicroK8s,
-    'microk8s-ssh': MicroK8s,
-    'minikube':     MiniKube,
-    'minikube-ssh': MiniKube,
-    'k8s':          K8sContext,
+    'microk8s': MicroK8s,
+    'minikube': MiniKube,
+    'k8s':      K8sContext,
 }
 
 _CACHE: dict[tuple[str, str, str], KubeCtl] = {}

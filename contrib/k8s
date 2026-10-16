@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Generic Kubernetes helper script
-# Saves state to .k8s-env in the current directory
+# Saves state to ~/.k8s-env (same layout as the Python version)
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -12,7 +12,8 @@ BOLD='\033[1m'
 DIM='\033[2m'
 NC='\033[0m'
 
-ENV_FILE=".k8s-env"
+CONFIG_DIR="$HOME/.k8s-env"
+ENV_FILE="$CONFIG_DIR/active"
 
 # --- Helpers ---
 
@@ -44,7 +45,7 @@ validate_value() {
 validate_host()      { validate_value "host" "$1" '[A-Za-z0-9._@:/-]+'; }
 validate_context()   { validate_value "context" "$1" '[A-Za-z0-9._:@/-]+'; }
 validate_namespace() { validate_value "namespace" "$1" '[a-z0-9][-a-z0-9]*[a-z0-9]?'; }
-validate_tool()      { validate_value "tool" "$1" '(microk8s|microk8s-ssh|minikube|minikube-ssh|k8s)'; }
+validate_tool()      { validate_value "tool" "$1" '(microk8s|minikube|k8s)'; }
 
 # Interactive picker: pick [--auto] [--multi] "Title" item1 item2 ...
 # Sets PICKED and PICKED_IDX (arrays when --multi, single-element otherwise)
@@ -112,23 +113,23 @@ pick() {
 
 
 # Print environment banner
+# '[shop/dev] k8s @ gke-prod / shop'; the tag is yellow when kubectl runs over SSH
 print_env_banner() {
-    if [ -f "$ENV_FILE" ]; then
-        case "$ENV_TOOL" in
-            microk8s)     echo -e "${YELLOW}[microk8s local]${NC} namespace: ${BOLD}$ENV_NS${NC}" ;;
-            microk8s-ssh) echo -e "${YELLOW}[microk8s ssh]${NC} host: ${BOLD}$ENV_SSH_HOST${NC} | namespace: ${BOLD}$ENV_NS${NC}" ;;
-            minikube)     echo -e "${YELLOW}[minikube local]${NC} namespace: ${BOLD}$ENV_NS${NC}" ;;
-            minikube-ssh) echo -e "${YELLOW}[minikube ssh]${NC} host: ${BOLD}$ENV_SSH_HOST${NC} | namespace: ${BOLD}$ENV_NS${NC}" ;;
-            k8s)          echo -e "${CYAN}[k8s remote]${NC} context: ${BOLD}$ENV_CTX${NC} | namespace: ${BOLD}$ENV_NS${NC}" ;;
-        esac
+    [ -f "$ENV_FILE" ] || return 0
+    local label="${ENV_NAME:-$(basename "$(readlink "$ENV_FILE")" .env)}"
+    local color="$CYAN" location="${ENV_CTX:-local}"
+    if [ -n "$ENV_SSH_HOST" ]; then
+        color="$YELLOW" location="$ENV_SSH_HOST (ssh)"
     fi
+    echo -e "${color}[$label]${NC} ${BOLD}$ENV_TOOL @ $location / $ENV_NS${NC}"
 }
 
-# Parse .k8s-env into ENV_* variables (single pass, validated)
+# Parse the active env into ENV_* variables (single pass, validated)
 load_env_vars() {
-    ENV_TOOL="" ENV_CTX="" ENV_NS="" ENV_SSH_HOST=""
+    ENV_TOOL="" ENV_CTX="" ENV_NS="" ENV_SSH_HOST="" ENV_NAME=""
     while IFS='=' read -r key val; do
         case "$key" in
+            name)      ENV_NAME="$val" ;;
             tool)      ENV_TOOL="$val" ;;
             context)   ENV_CTX="$val" ;;
             namespace) ENV_NS="$val" ;;
@@ -143,6 +144,9 @@ load_env() {
         print_error "No environment set. Run: k8s use"
         exit 1
     fi
+    if [ -n "${K8S_ENV:-}" ]; then
+        print_warning "K8S_ENV is not supported here — using the active env" >&2
+    fi
     load_env_vars
     validate_tool "$ENV_TOOL"
     [ -n "$ENV_NS" ] && validate_namespace "$ENV_NS"
@@ -151,9 +155,9 @@ load_env() {
 
     SSH_HOST="$ENV_SSH_HOST"
     case "$ENV_TOOL" in
-        microk8s|microk8s-ssh) KUBECTL_CMD=(microk8s kubectl) ;;
-        minikube|minikube-ssh) KUBECTL_CMD=(kubectl --context minikube) ;;
-        k8s)                  KUBECTL_CMD=(kubectl --context "$ENV_CTX") ;;
+        microk8s) KUBECTL_CMD=(microk8s kubectl) ;;
+        minikube) KUBECTL_CMD=(kubectl --context minikube) ;;
+        k8s)      KUBECTL_CMD=(kubectl --context "$ENV_CTX") ;;
     esac
 }
 
@@ -181,30 +185,29 @@ get_namespace() {
     fi
 }
 
-# Write env file with restricted permissions (preserves pf.* lines)
+# Write the env with restricted permissions (preserves name and pf.* lines) and activate it
 save_env() {
     local tool="$1" ssh_host="$2" context="$3" namespace="$4"
-    if [ -L "$ENV_FILE" ]; then
-        print_error "$ENV_FILE is a symlink — refusing to write"
-        exit 1
+    local key="${tool}-${ssh_host:-${context:-local}}-${namespace}"
+    local file="$CONFIG_DIR/envs/$key.env" extra=""
+    (umask 077; mkdir -p "$CONFIG_DIR/envs")
+    if [ -f "$file" ]; then
+        extra=$(grep -vE '^(tool|ssh_host|context|namespace)=' "$file" || true)
     fi
-    local pf_lines=""
-    if [ -f "$ENV_FILE" ]; then
-        pf_lines=$(grep '^pf\.' "$ENV_FILE" 2>/dev/null || true)
-    fi
-    (umask 077; cat > "$ENV_FILE" <<EOF
+    (umask 077; cat > "$file" <<EOF
 tool=$tool
 ssh_host=$ssh_host
 context=$context
 namespace=$namespace
 EOF
     )
-    if [ -n "$pf_lines" ]; then
-        echo "$pf_lines" >> "$ENV_FILE"
+    if [ -n "$extra" ]; then
+        echo "$extra" >> "$file"
     fi
+    ln -sfn "envs/$key.env" "$ENV_FILE"
 }
 
-# Save a port-forward mapping to .k8s-env
+# Save a port-forward mapping to the active env
 save_forward() {
     local svc="$1" remote_port="$2" local_port="$3"
     local key="pf.${svc}.${remote_port}"
@@ -215,7 +218,7 @@ save_forward() {
     echo "${key}=${local_port}" >> "$ENV_FILE"
 }
 
-# Load a saved port-forward mapping from .k8s-env
+# Load a saved port-forward mapping from the active env
 load_forward() {
     local svc="$1" remote_port="$2"
     local key="pf.${svc}.${remote_port}"
@@ -372,13 +375,13 @@ cmd_use_remote() {
     local entries=() labels=()
     if [ -n "$mk8s_ns" ]; then
         while IFS= read -r ns; do
-            entries+=("microk8s-ssh|$ns")
+            entries+=("microk8s|$ns")
             labels+=("$ns ${DIM}(microk8s)${NC}")
         done <<< "$mk8s_ns"
     fi
     if [ -n "$mini_ns" ]; then
         while IFS= read -r ns; do
-            entries+=("minikube-ssh|$ns")
+            entries+=("minikube|$ns")
             labels+=("$ns ${DIM}(minikube)${NC}")
         done <<< "$mini_ns"
     fi
@@ -397,21 +400,12 @@ cmd_use_remote() {
     save_env "$tool" "$host" "" "$ns"
 
     echo ""
-    local runtime="${tool%-ssh}"
-    print_status "Set to ${YELLOW}$runtime ssh${NC} host: ${BOLD}$host${NC} namespace: ${BOLD}$ns${NC}"
+    print_status "Set to ${YELLOW}$tool ssh${NC} host: ${BOLD}$host${NC} namespace: ${BOLD}$ns${NC}"
 }
 
-cmd_ctx() {
+cmd_env() {
     load_env
-    local parts="$ENV_TOOL"
-    if [ -n "$ENV_SSH_HOST" ]; then
-        parts="$parts on $ENV_SSH_HOST"
-    elif [ -n "$ENV_CTX" ]; then
-        parts="$parts on context: $ENV_CTX"
-    else
-        parts="$parts on local"
-    fi
-    echo -e "${CYAN}[local]${NC} $parts / ${BOLD}$ENV_NS${NC}"
+    print_env_banner
 }
 
 cmd_pods() {
@@ -745,7 +739,7 @@ show_help() {
     echo -e "${BOLD}Environment:${NC}"
     echo "  use                    Pick namespace from local microk8s/minikube + k8s contexts"
     echo "  use-remote <host>      Pick namespace from remote microk8s/minikube via SSH"
-    echo "  ctx                    Show active environment (no cluster queries)"
+    echo "  env                    Show the active env (no cluster queries)"
     echo ""
     echo -e "${BOLD}Inspection:${NC}"
     echo "  pods [filter]          List pods (filter by name)"
@@ -786,7 +780,7 @@ case "$CMD" in
     ""|"-h"|"--help") show_help ;;
     use)              cmd_use ;;
     use-remote)       cmd_use_remote ;;
-    ctx)              cmd_ctx ;;
+    env)              cmd_env ;;
     pods)             cmd_pods ;;
     logs)             cmd_logs ;;
     restart)          cmd_restart ;;

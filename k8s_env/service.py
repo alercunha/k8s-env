@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-import hashlib
 import os
 import stat
 import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
 
 from k8s_env import k8s
 from k8s_env.utils import is_available, validate
@@ -17,28 +15,26 @@ class Env:
     def __init__(
         self, tool: str, ssh_host: str = '', context: str = '',
         namespace: str = '', port_forwards: dict[str, str] | None = None,
-        content_hash: str = '', alias: str = '',
+        name: str = '',
     ) -> None:
         self.tool = tool
         self.ssh_host = ssh_host
         self.context = context
         self.namespace = namespace
         self.port_forwards = port_forwards or {}
-        self.content_hash = content_hash
-        self.alias = alias
+        self.name = name
 
     @classmethod
     def load(cls, path: str) -> Env:
         mode = os.lstat(path).st_mode
         if not stat.S_ISREG(mode):
             raise SystemExit(f'Refusing to load {path}: not a regular file')
-        with open(path, 'rb') as f:
+        with open(path, encoding='utf-8') as f:
             raw = f.read()
-        content_hash = hashlib.sha256(raw).hexdigest()
         # Parse key=value pairs; pf.* lines become port_forwards
         fields: dict[str, str] = {}
         port_forwards: dict[str, str] = {}
-        for line in raw.decode().splitlines():
+        for line in raw.splitlines():
             line = line.strip()
             if not line or '=' not in line:
                 continue
@@ -53,8 +49,7 @@ class Env:
             context=fields.get('context', ''),
             namespace=fields.get('namespace', ''),
             port_forwards=port_forwards,
-            content_hash=content_hash,
-            alias=fields.get('alias', ''),
+            name=fields.get('name', ''),
         )
         env.validate()
         return env
@@ -67,8 +62,8 @@ class Env:
             validate('context', self.context)
         if self.ssh_host:
             validate('host', self.ssh_host)
-        if self.alias:
-            validate('alias', self.alias)
+        if self.name:
+            validate('name', self.name)
         for key, val in self.port_forwards.items():
             if not val.isdigit() or not 1 <= int(val) <= 65535:
                 raise ValueError(f"Invalid port forward value for {key}: '{val}'")
@@ -80,36 +75,39 @@ class Env:
             f.write(f'ssh_host={self.ssh_host}\n')
             f.write(f'context={self.context}\n')
             f.write(f'namespace={self.namespace}\n')
-            f.write(f'alias={self.alias}\n')
+            f.write(f'name={self.name}\n')
             for key, val in self.port_forwards.items():
                 f.write(f'{key}={val}\n')
 
     @property
-    def profile_name(self) -> str:
-        location = self.ssh_host or self.context or 'local'
-        return f'{self.tool}-{location}-{self.namespace}'
+    def key(self) -> str:
+        # Storage id (filename); stable regardless of the user-facing name
+        return f'{self.tool}-{self.ssh_host or self.context or "local"}-{self.namespace}'
+
+    @property
+    def label(self) -> str:
+        return self.name or self.key
+
+    @property
+    def target(self) -> str:
+        # Where kubectl runs: 'k8s @ <kubectl context>', 'microk8s @ local', 'minikube @ <host> (ssh)'
+        location = f'{self.ssh_host} (ssh)' if self.ssh_host else self.context or 'local'
+        return f'{self.tool} @ {location}'
+
+    def describe(self, namespace: str = '') -> str:
+        return f'{self.target} / {namespace or self.namespace}'
 
 
 
 # -- Discovery ---------------------------------------------------------------
 
-@dataclass
-class NamespaceEntry:
-    tool: str
-    context: str
-    namespace: str
-    group: str
-
-
-def _probe_namespaces(kubectl: k8s.KubeCtl, location: str) -> list[NamespaceEntry]:
-    # Derive tool, context, and group label from the kubectl instance
+def _probe_namespaces(kubectl: k8s.KubeCtl) -> list[Env]:
     try:
         namespaces = kubectl.list_custom_namespaces(timeout=DISCOVERY_TIMEOUT)
     except (RuntimeError, OSError):
         return []
-    group = f'{kubectl.tool_name} on {location}'
     return [
-        NamespaceEntry(tool=kubectl.tool_name, context=kubectl.context, namespace=ns, group=group)
+        Env(tool=kubectl.tool_name, ssh_host=kubectl.ssh_host, context=kubectl.context, namespace=ns)
         for ns in namespaces
     ]
 
@@ -123,13 +121,13 @@ def _minikube_running() -> bool:
         return False
 
 
-def _collect_probes(probes: list[tuple]) -> list[NamespaceEntry]:
+def _collect_probes(probes: list[k8s.KubeCtl]) -> list[Env]:
     # Pre-allocate slots to preserve display order regardless of completion order
-    entries: list[list[NamespaceEntry]] = [[] for _ in probes]
+    entries: list[list[Env]] = [[] for _ in probes]
     with ThreadPoolExecutor(max_workers=len(probes)) as pool:
         future_to_idx = {
-            pool.submit(_probe_namespaces, *args): i
-            for i, args in enumerate(probes)
+            pool.submit(_probe_namespaces, kubectl): i
+            for i, kubectl in enumerate(probes)
         }
         for future in as_completed(future_to_idx):
             entries[future_to_idx[future]] = future.result()
@@ -137,15 +135,15 @@ def _collect_probes(probes: list[tuple]) -> list[NamespaceEntry]:
     return [e for batch in entries for e in batch]
 
 
-def discover_local() -> list[NamespaceEntry]:
+def discover_local() -> list[Env]:
     # Build probe list from available runtimes, then run all in parallel
-    probes: list[tuple] = []
+    probes: list[k8s.KubeCtl] = []
 
     if is_available('microk8s'):
-        probes.append((k8s.get('microk8s'), 'local'))
+        probes.append(k8s.get('microk8s'))
 
     if is_available('minikube') and _minikube_running():
-        probes.append((k8s.get('minikube'), 'local'))
+        probes.append(k8s.get('minikube'))
 
     # Add one probe per kubectl context (skip minikube, handled above)
     if is_available('kubectl'):
@@ -158,14 +156,14 @@ def discover_local() -> list[NamespaceEntry]:
             out = ''
         for ctx_name in out.strip().splitlines():
             if ctx_name and ctx_name != 'minikube':
-                probes.append((k8s.get('k8s', context=ctx_name), f'context: {ctx_name}'))
+                probes.append(k8s.get('k8s', context=ctx_name))
 
     return _collect_probes(probes) if probes else []
 
 
-def discover_remote(host: str) -> list[NamespaceEntry]:
+def discover_remote(host: str) -> list[Env]:
     validate('host', host)
     return _collect_probes([
-        (k8s.get('microk8s', ssh_host=host), host),
-        (k8s.get('minikube', ssh_host=host), host),
+        k8s.get('microk8s', ssh_host=host),
+        k8s.get('minikube', ssh_host=host),
     ])
