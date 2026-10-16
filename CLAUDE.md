@@ -26,7 +26,7 @@ uv run pytest -m integration -v
 
 ## Dockerfile
 
-Stages: `base` (uv + Python) → `deps` (`uv sync --locked`, cached on pyproject/uv.lock) → `test` (pylint + `uv run pytest`) → `build` (`uv build`) → `integration` (default; adds docker CLI, kind, kubectl). `dist` (`FROM scratch`) exports the wheel with `docker build --target dist -o dist .`.
+Stages: `base` (`python:3.12-slim-trixie` with the uv binaries copied in) → `deps` (`uv sync --locked`, cached on pyproject/uv.lock) → `test` (pylint + `uv run pytest`) → `build` (`uv build`) → `integration` (default; adds docker CLI, kind, kubectl). `dist` (`FROM scratch`) exports the wheel with `docker build --target dist -o dist .`.
 
 - `uv run pytest` exits 5 when no tests are collected; the `test` stage accepts that while every test is an integration test.
 - The integration image runs kind against the host daemon: `docker run --rm --network host -v /var/run/docker.sock:/var/run/docker.sock k8s-env`. `--network host` is required because the kind API server and the test's port-forward bind to the host's `127.0.0.1`.

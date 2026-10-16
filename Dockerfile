@@ -12,11 +12,14 @@
 # port-forward the test opens, both bound to the host's 127.0.0.1.
 
 # =============================================================================
-# base: uv + Python
+# base: Python + uv
 # =============================================================================
-FROM ghcr.io/astral-sh/uv:0.12.21-python3.12-trixie-slim AS base
+FROM python:3.12-slim-trixie AS base
+
+COPY --from=ghcr.io/astral-sh/uv:0.12.21 /uv /uvx /usr/local/bin/
 
 ENV UV_LINK_MODE=copy \
+    UV_PYTHON_DOWNLOADS=never \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 WORKDIR /src
