@@ -7,18 +7,18 @@ Kubernetes environment manager — interactive CLI for switching between k8s nam
 Run before every commit. Must pass clean.
 
 ```
-uvx pylint k8s_env/ tests/
+uvx --with pytest pylint k8s_env/ tests/
 ```
 
-Integration test (skipped by default; requires `docker`, `kind`, `kubectl`). Run it after changing CLI behavior:
+Tests run with pytest (dev dependency). The integration test is marked `integration` and deselected by default (`addopts` in pyproject.toml); it requires `docker`, `kind`, `kubectl`. Run it after changing CLI behavior:
 
 ```
-K8S_ENV_IT=1 python3 -m unittest discover -s tests -v
+uv run pytest -m integration -v
 ```
 
 ## Integration test
 
-`tests/test_integration.py` (stdlib `unittest`) creates a kind cluster `k8s-env-it`, applies `assets/seed.yaml`, and walks one scenario through every command except `env add-remote`, `dashboard`, `app`, and the interactive `exec` shell (SSH and browser/TTY flows are out of scope).
+`tests/test_integration.py` (a module-scoped pytest fixture plus a `unittest.TestCase` scenario) creates a kind cluster `k8s-env-it`, applies `assets/seed.yaml`, and walks one scenario through every command except `env add-remote`, `dashboard`, `app`, and the interactive `exec` shell (SSH and browser/TTY flows are out of scope).
 
 - The CLI runs as a subprocess with a sandboxed `HOME`, `KUBECONFIG` (written by `kind --kubeconfig`, never `~/.kube/config`), and a `PATH` holding only `kubectl`, so discovery sees just the kind context.
 - `k8s()` gives the CLI a pty as stdin with picker/prompt answers typed ahead; `k8s_running()` handles commands that run until stopped (`pf`, `logs -f`) and kills the process group afterwards.
@@ -37,7 +37,7 @@ k8s_env/             # Main package (stdlib only — no third-party imports)
   store.py           # EnvStore — env files and the active link in ~/.k8s-env
   utils.py           # Validators, constants (CONFIG_DIR, ENV_VAR, CMD, SYSTEM_NAMESPACES)
 tests/
-  test_integration.py  # End-to-end test against a kind cluster (skipped unless K8S_ENV_IT=1)
+  test_integration.py  # End-to-end test against a kind cluster (pytest marker `integration`)
 contrib/
   k8s                # Standalone bash alternative (drop-in replacement, limited features)
   README.md          # Differences between bash and Python versions

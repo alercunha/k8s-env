@@ -1,8 +1,8 @@
 """End-to-end test of the k8s CLI against a kind cluster seeded with assets/seed.yaml.
 
-Skipped unless K8S_ENV_IT=1. Requires docker, kind and kubectl:
+Marked `integration`, which plain `uv run pytest` deselects. Requires docker, kind and kubectl:
 
-    K8S_ENV_IT=1 python3 -m unittest discover -s tests -v
+    uv run pytest -m integration -v
 
 The CLI runs with a sandboxed HOME, KUBECONFIG and PATH (kubectl only), so no real
 cluster, kubeconfig or ~/.k8s-env is touched. The cluster is deleted at the end;
@@ -17,15 +17,18 @@ import shutil
 import signal
 import subprocess
 import sys
-import tempfile
 import unittest
 import urllib.request
+
+import pytest
+
+pytestmark = pytest.mark.integration
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ENTRY = os.path.join(ROOT, 'k8s-env')
 CLUSTER = 'k8s-env-it'
 CONTEXT = f'kind-{CLUSTER}'
-TMP = KUBECONFIG = ''
+KUBECONFIG = ''
 ENV: dict[str, str] = {}
 
 
@@ -36,31 +39,30 @@ def _sh(*cmd: str) -> str:
     return proc.stdout
 
 
-def setUpModule() -> None:  # pylint: disable=invalid-name
-    global TMP, KUBECONFIG  # pylint: disable=global-statement
-    if not os.environ.get('K8S_ENV_IT'):
-        raise unittest.SkipTest('set K8S_ENV_IT=1 to run')
-    # Cleanups are registered as resources are created, so they also run if setup fails
-    # midway; they run in reverse order (cluster deletion needs KUBECONFIG inside TMP).
-    TMP = tempfile.mkdtemp(prefix='k8s-env-it-')
-    unittest.addModuleCleanup(shutil.rmtree, TMP, ignore_errors=True)
-    KUBECONFIG = os.path.join(TMP, 'kubeconfig')
-    if not os.environ.get('K8S_ENV_IT_KEEP'):
-        unittest.addModuleCleanup(_sh, 'kind', 'delete', 'cluster', '--name', CLUSTER, '--kubeconfig', KUBECONFIG)
-    # Reuse a kept cluster (K8S_ENV_IT_KEEP); kind writes only to our kubeconfig, never ~/.kube/config
-    if CLUSTER not in _sh('kind', 'get', 'clusters').split():
-        _sh('kind', 'create', 'cluster', '--name', CLUSTER, '--kubeconfig', KUBECONFIG)
-    _sh('kind', 'export', 'kubeconfig', '--name', CLUSTER, '--kubeconfig', KUBECONFIG)
-    _sh('kubectl', '--kubeconfig', KUBECONFIG, 'apply', '-f', os.path.join(ROOT, 'assets', 'seed.yaml'))
-    _sh('kubectl', '--kubeconfig', KUBECONFIG, 'wait', 'deployment', '--all', '--all-namespaces',
-        '--for=condition=Available', '--timeout=180s')
+@pytest.fixture(scope='module', autouse=True)
+def _cluster(tmp_path_factory):
+    global KUBECONFIG  # pylint: disable=global-statement
+    tmp = tmp_path_factory.mktemp('k8s-env-it')
+    KUBECONFIG = str(tmp / 'kubeconfig')
+    try:
+        # Reuse a kept cluster (K8S_ENV_IT_KEEP); kind writes only to our kubeconfig, never ~/.kube/config
+        if CLUSTER not in _sh('kind', 'get', 'clusters').split():
+            _sh('kind', 'create', 'cluster', '--name', CLUSTER, '--kubeconfig', KUBECONFIG)
+        _sh('kind', 'export', 'kubeconfig', '--name', CLUSTER, '--kubeconfig', KUBECONFIG)
+        _sh('kubectl', '--kubeconfig', KUBECONFIG, 'apply', '-f', os.path.join(ROOT, 'assets', 'seed.yaml'))
+        _sh('kubectl', '--kubeconfig', KUBECONFIG, 'wait', 'deployment', '--all', '--all-namespaces',
+            '--for=condition=Available', '--timeout=180s')
 
-    # PATH holds only kubectl, so discovery finds just this cluster's kubectl context
-    bin_dir, home = os.path.join(TMP, 'bin'), os.path.join(TMP, 'home')
-    os.mkdir(bin_dir)
-    os.mkdir(home)
-    os.symlink(shutil.which('kubectl'), os.path.join(bin_dir, 'kubectl'))
-    ENV.update(HOME=home, KUBECONFIG=KUBECONFIG, PATH=bin_dir)
+        # PATH holds only kubectl, so discovery finds just this cluster's kubectl context
+        (tmp / 'bin').mkdir()
+        (tmp / 'home').mkdir()
+        (tmp / 'bin' / 'kubectl').symlink_to(shutil.which('kubectl'))
+        ENV.update(HOME=str(tmp / 'home'), KUBECONFIG=KUBECONFIG, PATH=str(tmp / 'bin'))
+        yield
+    finally:
+        # Also runs when setup fails midway
+        if not os.environ.get('K8S_ENV_IT_KEEP'):
+            _sh('kind', 'delete', 'cluster', '--name', CLUSTER, '--kubeconfig', KUBECONFIG)
 
 
 @contextlib.contextmanager
