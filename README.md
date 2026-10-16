@@ -140,7 +140,7 @@ All inspection commands support an optional filter argument to narrow results by
 | `secrets [filter]` | List secret names |
 | `cronjobs [filter]` | List cronjobs |
 | `status` | Show cluster and namespace stats |
-| `describe [resource]` | Describe a resource (picker if omitted) |
+| `describe [filter]` | Describe a pod, deployment, service, or configmap (picker when several match) |
 
 ### Actions
 
