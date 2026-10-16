@@ -63,6 +63,7 @@ pyproject.toml       # Project metadata, pylint configuration
 
 Constraints baked into `demo.tape` (changing them tends to regress the output):
 
-- `Set Framerate 10` — at the gif resolution VHS drops frames at the default framerate, which compresses every `Sleep` and ruins the read pacing. Total runtime targets ~90s.
+- `Set Framerate 10` — at the gif resolution VHS drops frames at the default framerate, which compresses every `Sleep` and ruins the read pacing. Total runtime targets ~100s.
+- The hidden setup block pre-adds `payments/dev` so the grouped `k8s ctx` list and the `-c payments/dev` scene have a second context.
 - The minikube profile name is kept short (`kdemo`) because it becomes the node name in `kubectl get pods -o wide`; a long name overflows `Width` and wraps the table.
 - `Width` is sized so the widest line (`pods -o wide`, ~119 columns) fits without wrapping.
