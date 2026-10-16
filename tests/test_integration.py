@@ -148,6 +148,9 @@ class TestCli(unittest.TestCase):
         self.assertIn('Namespace shop:', k8s('status'))
         self.assertIn('ca.crt', k8s('configmaps', stdin='1\n'))
         self.assertIn('Replicas:', k8s('describe', 'deployment/storefront'))
+        out = k8s('describe', 'storefront', stdin='4\n')    # 2 pods, then deployment, then service
+        self.assertIn('4) service/storefront', out)
+        self.assertIn('Endpoints:', out)
         self.assertIn('cart: checkout ok', k8s('logs', 'cart', '--tail', '3'))
         self.assertIn('Recent events in shop', k8s('events'))
         self.assertIn('Secrets in shop', k8s('secrets'))

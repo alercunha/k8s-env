@@ -602,17 +602,15 @@ def cmd_dashboard(app: App, args: list[str]) -> None:
     open_url(url)
 
 
-def cmd_describe(app: App, arg: str) -> None:
+def cmd_describe(app: App, filter_text: str) -> None:
     print_banner(app)
     ns = app.namespace
-
-    if not arg:
-        resources = app.kubectl.list_resources(ns)
-        if not resources:
-            print_warning(f'No resources found in {ns}')
-            return
-        arg = pick(f'Resources in {ns}', resources, auto=True)[0][1]
-    print(app.kubectl.describe(arg, ns), end='')
+    resources = _filter(app.kubectl.list_resources(ns), filter_text)
+    if not resources:
+        print_warning(f'No resources found in {ns}')
+        return
+    selected = pick(f'Resources in {ns}', resources, auto=True)[0][1]
+    print(app.kubectl.describe(selected, ns), end='')
 
 
 def cmd_status(app: App) -> None:
@@ -692,7 +690,8 @@ _COMMANDS_META = {
     'secrets':    _Cmd('Inspection', 'List secret names', args='[filter]'),
     'cronjobs':   _Cmd('Inspection', 'List cronjobs', args='[filter]', aliases=('cj',)),
     'status':     _Cmd('Inspection', 'Show cluster and namespace stats', aliases=('st',)),
-    'describe':   _Cmd('Inspection', 'Describe a resource (picker if omitted)', args='[resource]', aliases=('desc',)),
+    'describe':   _Cmd('Inspection', 'Describe a resource (picker when several match)', args='[filter]',
+                       aliases=('desc',)),
     # Actions
     'exec':         _Cmd('Actions', 'Open a shell in a pod, or run a command after --', args='[filter]',
                          aliases=('sh',), forms=('exec [filter]', 'exec [filter] -- cmd')),
